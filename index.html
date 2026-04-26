@@ -1,0 +1,1627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Análisis Cuantitativo — Generador Numérico (1-43 / 1-16)</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+* { box-sizing: border-box; margin:0; padding:0; }
+:root {
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d2029; --accent:#3ea6ff; --accent2:#ffb53e;
+  --ok:#4ade80; --warn:#facc15; --bad:#f87171; --text:#e5e7eb; --muted:#9ca3af; --border:#262b35;
+}
+html,body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; line-height:1.55; }
+body { display:flex; flex-direction:row; min-height:100vh; }
+nav.side { position:sticky; top:0; height:100vh; flex:0 0 260px; width:260px; background:var(--panel); border-right:1px solid var(--border); padding:24px 20px; overflow-y:auto; }
+nav.side h1 { font-size:16px; margin-bottom:6px; color:var(--accent); }
+nav.side p.sub { font-size:12px; color:var(--muted); margin-bottom:18px; }
+nav.side ul { list-style:none; }
+nav.side li { margin:2px 0; }
+nav.side a { color:var(--text); text-decoration:none; padding:9px 12px; display:block; border-radius:6px; font-size:13.5px; transition:background .15s; }
+nav.side a:hover { background:var(--panel2); color:var(--accent); }
+nav.side a.active { background:var(--accent); color:#0b0d12; font-weight:600; }
+
+main { padding:36px 48px; max-width:1280px; }
+header.hero { margin-bottom:30px; border-bottom:1px solid var(--border); padding-bottom:20px; }
+header.hero h1 { font-size:28px; color:var(--accent); margin-bottom:6px; }
+header.hero p.tag { color:var(--muted); font-size:14px; }
+header.hero .meta { display:flex; gap:16px; margin-top:12px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+
+section { margin:48px 0; scroll-margin-top:20px; }
+section h2 { color:var(--accent); font-size:22px; margin-bottom:6px; border-left:4px solid var(--accent); padding-left:10px; }
+section h3 { color:var(--accent2); font-size:17px; margin:22px 0 10px 0; }
+section p { margin:10px 0; color:#d4d6db; }
+section .lead { font-size:15px; color:#c4c7cd; background:var(--panel); padding:14px 18px; border-left:3px solid var(--accent); border-radius:4px; margin:10px 0 18px; }
+
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin:14px 0 24px; }
+.kpi { background:var(--panel); padding:18px; border-radius:10px; border:1px solid var(--border); }
+.kpi .lbl { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+.kpi .val { color:var(--accent); font-size:26px; font-weight:700; margin:6px 0 2px; }
+.kpi .sub { color:var(--muted); font-size:12px; }
+
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+@media (max-width:1000px) { .two-col { grid-template-columns:1fr; } body { grid-template-columns:1fr; } nav.side { position:relative; height:auto; } }
+
+.panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:18px; margin:14px 0; }
+.panel h4 { color:var(--accent2); font-size:15px; margin-bottom:10px; }
+
+table.tbl { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0; }
+table.tbl th, table.tbl td { padding:7px 10px; border-bottom:1px solid var(--border); text-align:left; }
+table.tbl th { color:var(--accent); background:var(--panel2); font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.04em; }
+table.tbl td.num { text-align:right; font-variant-numeric:tabular-nums; }
+table.tbl tr:hover td { background:#1b1f27; }
+
+.bullet { background:var(--panel); padding:14px 18px 14px 22px; border-radius:8px; margin:10px 0; border-left:3px solid var(--accent2); }
+.bullet b { color:var(--accent); }
+
+.chip { display:inline-block; padding:3px 9px; background:var(--panel2); border:1px solid var(--border); border-radius:12px; margin:2px; font-size:12px; color:var(--text); }
+.chip.hot { background:#3b1a1a; border-color:#663333; color:#ffb4b4; }
+.chip.cold { background:#0f2a42; border-color:#1e4062; color:#9ccdff; }
+.chip.pick { background:#14321e; border-color:#265d36; color:#86efac; font-weight:600; }
+.chip.neu { background:var(--panel2); }
+
+.combo-box { background:linear-gradient(135deg,#14321e,#0f1e16); border:1px solid #265d36; padding:14px; border-radius:10px; margin:8px 0; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.combo-box .lbl { color:#86efac; font-size:12px; margin-right:8px; text-transform:uppercase; }
+.ball { display:inline-flex; width:34px; height:34px; border-radius:50%; background:var(--accent); color:#0b0d12; font-weight:700; align-items:center; justify-content:center; font-size:13px; }
+.ball.diff { background:var(--accent2); color:#0b0d12; }
+.ball.hot { background:#f87171; color:#0b0d12; }
+.ball.cold { background:#60a5fa; color:#0b0d12; }
+
+.chart-wrap { position:relative; height:320px; margin:10px 0; }
+.chart-wrap.tall { height:420px; }
+
+.note { background:#1a2030; border:1px solid #2a3550; padding:14px 18px; border-radius:8px; margin:16px 0; font-size:13.5px; color:#bfd3ff; }
+.note.warn { background:#2a1f0f; border-color:#5a3b15; color:#ffd9a1; }
+.note.crit { background:#2a1010; border-color:#5a1b1b; color:#ffb4b4; }
+
+.tabs { display:flex; gap:4px; margin:10px 0 14px; border-bottom:1px solid var(--border); }
+.tab-btn { background:none; border:none; color:var(--muted); padding:9px 16px; cursor:pointer; font-size:13.5px; border-bottom:2px solid transparent; }
+.tab-btn.active { color:var(--accent); border-color:var(--accent); font-weight:600; }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:center; border-top:1px solid var(--border); padding-top:20px; }
+
+.badge-ok { background:#103c1e; color:#86efac; padding:3px 9px; border-radius:6px; font-size:12px; font-weight:600; }
+.badge-bad { background:#3a1414; color:#ffb4b4; padding:3px 9px; border-radius:6px; font-size:12px; font-weight:600; }
+
+/* ===== REGISTRO FORM ===== */
+.form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin:16px 0; }
+.form-field { display:flex; flex-direction:column; gap:5px; }
+.form-field label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.form-field input, .form-field select { background:var(--panel2); border:1px solid var(--border); color:var(--text); padding:9px 12px; border-radius:6px; font-size:14px; width:100%; }
+.form-field input:focus, .form-field select:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px #3ea6ff33; }
+.btn-primary { background:var(--accent); color:#0b0d12; border:none; padding:11px 22px; border-radius:8px; font-size:13.5px; font-weight:600; cursor:pointer; transition:opacity .15s; }
+.btn-primary:hover:not(:disabled) { opacity:0.85; }
+.btn-primary:disabled { opacity:0.4; cursor:not-allowed; }
+.status-bar { padding:11px 16px; border-radius:8px; margin:14px 0; font-size:13.5px; display:none; }
+.status-bar.show { display:block; }
+.status-bar.ok { background:#103c1e; color:#86efac; border:1px solid #265d36; }
+.status-bar.error { background:#3a1414; color:#ffb4b4; border:1px solid #663333; }
+.status-bar.loading { background:#1a2030; color:#bfd3ff; border:1px solid #2a3550; }
+.db-table-wrap { max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:8px; }
+.config-panel { background:#12151e; border:1px solid #2a3550; border-radius:10px; padding:18px; margin:18px 0; }
+.config-panel h4 { color:#bfd3ff; font-size:14px; margin-bottom:12px; }
+.btn-save-cfg { background:#4ade80; color:#0b0d12; border:none; padding:9px 20px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+.btn-save-cfg:hover { opacity:0.85; }
+
+.badge-neutral { background:#2a2f3a; color:#cbd5e1; padding:3px 9px; border-radius:6px; font-size:12px; font-weight:600; }
+
+/* ===== PREDICCION HERO ===== */
+.pred-hero-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin:16px 0; }
+@media(max-width:900px){ .pred-hero-grid { grid-template-columns:1fr; } }
+.pred-card { background:linear-gradient(135deg,#0d1f14,#0f1a1a); border:1px solid #2d5a3d; border-radius:14px; padding:22px 24px; }
+.pred-card.sec { background:linear-gradient(135deg,#0f1520,#0d1825); border-color:#2a3a5a; }
+.pred-card-title { font-size:13px; text-transform:uppercase; letter-spacing:.07em; color:#86efac; font-weight:700; margin-bottom:6px; }
+.pred-card.sec .pred-card-title { color:#93c5fd; }
+.pred-card-sub { font-size:11.5px; color:var(--muted); margin-bottom:16px; }
+.pred-balls { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.ball-lg { display:inline-flex; width:44px; height:44px; border-radius:50%; background:var(--accent); color:#0b0d12; font-weight:800; align-items:center; justify-content:center; font-size:15px; box-shadow:0 0 14px #3ea6ff44; }
+.ball-lg.diff { background:var(--accent2); box-shadow:0 0 14px #ffb53e44; }
+.ball-lg.sec { background:#818cf8; box-shadow:0 0 14px #818cf844; }
+.ball-lg.diff-sec { background:#f472b6; box-shadow:0 0 14px #f472b644; }
+.pred-sep { color:#4b5563; font-size:20px; font-weight:300; }
+.pred-placeholder { color:var(--muted); font-style:italic; font-size:13.5px; padding:12px 0; }
+
+/* ===== LEARNING / POST-MORTEM ===== */
+.learning-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:18px; }
+@media(max-width:900px){ .learning-grid { grid-template-columns:1fr; } }
+.postmortem-card { background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:12px; }
+.pm-row { display:flex; align-items:center; gap:8px; margin:5px 0; }
+.pm-label { color:var(--muted); font-size:11px; width:62px; flex-shrink:0; text-transform:uppercase; letter-spacing:.04em; }
+.pm-balls { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+.pm-sep { color:#4b5563; font-size:14px; margin:0 2px; }
+.ball-sm { display:inline-flex; width:30px; height:30px; border-radius:50%; font-weight:700; align-items:center; justify-content:center; font-size:11.5px; }
+.ball-hit  { background:#166534; color:#86efac; border:2px solid #4ade80; }
+.ball-miss { background:#3a1414; color:#fca5a5; border:2px solid #7f1d1d; }
+.ball-surp { background:#1e3a5f; color:#93c5fd; border:2px solid #1d4ed8; }
+.ball-hit-d  { background:#7c3000; color:#fde68a; border:2px solid #d97706; }
+.ball-miss-d { background:#3a1414; color:#fca5a5; border:2px solid #7f1d1d; }
+.ball-surp-d { background:#1e3a5f; color:#93c5fd; border:2px solid #1d4ed8; }
+/* Weights bar */
+.weight-row { display:flex; align-items:center; gap:8px; margin:7px 0; }
+.weight-label { width:85px; font-size:12px; color:var(--text); flex-shrink:0; line-height:1.3; }
+.weight-bar-wrap { flex:1; background:#1a1e28; border-radius:4px; height:9px; overflow:hidden; }
+.weight-bar { height:100%; border-radius:4px; transition:width .7s ease; }
+.weight-delta { width:46px; font-size:11.5px; text-align:right; font-weight:700; flex-shrink:0; }
+.score-badge { display:inline-block; padding:2px 8px; border-radius:6px; font-size:12px; font-weight:700; }
+
+/* ===== HISTORIAL PREDICCIONES ===== */
+.hist-ball { display:inline-flex; width:26px; height:26px; border-radius:50%; font-weight:700; align-items:center; justify-content:center; font-size:11px; background:var(--panel2); color:var(--text); }
+.hist-ball.hit { background:#166534; color:#86efac; }
+.hist-ball.miss { background:var(--panel2); color:#6b7280; }
+.hist-kpi-mini { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin:0 0 18px; }
+
+</style>
+</head>
+<body>
+<nav class="side">
+  <h1>Análisis Quant</h1>
+  <p class="sub">Generador 1-43 / 1-16</p>
+  <ul>
+    <li><a href="#prediccion" style="color:#4ade80;font-weight:700;font-size:14px">&#127919; Predicción</a></li>
+    <li><a href="#registro" style="color:#86efac;">&#8853; Registrar Sorteo</a></li>
+    <li><a href="#resumen" class="active">Resumen Ejecutivo</a></li>
+    <li><a href="#eda">1. EDA</a></li>
+    <li><a href="#frecuencias">2. Frecuencias</a></li>
+    <li><a href="#uniformidad">3. Uniformidad</a></li>
+    <li><a href="#patrones">4. Patrones Temporales</a></li>
+    <li><a href="#ciclos">5. Ciclos y Sequías</a></li>
+    <li><a href="#pares">6. Pares y Tripletas</a></li>
+    <li><a href="#hotcold">7. Calientes/Fríos</a></li>
+    <li><a href="#predictivo">8. Modelo Predictivo</a></li>
+    <li><a href="#combos">9. Combos Sugeridos</a></li>
+    <li><a href="#historial-pred" style="color:#a78bfa;">&#128196; Historial Predicciones</a></li>
+    <li><a href="#powerbi">10. Dashboard Power BI</a></li>
+    <li><a href="#conclusiones">11. Conclusiones</a></li>
+  </ul>
+</nav>
+
+<main>
+<header class="hero">
+  <h1>Análisis Cuantitativo — Generador Numérico</h1>
+  <p class="tag">Reporte de quant senior · EDA + Tests estadísticos + Modelo probabilístico · Datos en vivo desde Supabase</p>
+  <div class="meta" id="heroMeta"></div>
+</header>
+
+<!-- ===== PREDICCIÓN DESTACADA ===== -->
+<section id="prediccion" style="margin:0 0 40px 0; scroll-margin-top:20px;">
+  <h2 style="color:#4ade80;border-left-color:#4ade80;">&#127919; Predicción — Próximo Sorteo</h2>
+  <p class="lead">Modelo probabilístico con <b>pesos auto-ajustados</b> cada vez que ingresas resultados reales. Aprende qué criterio (frecuencia, sequía o coocurrencia) predijo mejor los últimos 20 sorteos.</p>
+  <div id="predHeroContent">
+    <p class="pred-placeholder">&#9203; Configura Supabase y carga los datos para ver la predicción...</p>
+  </div>
+  <div class="learning-grid" id="learningPanel" style="display:none;">
+    <div class="panel">
+      <h4>&#9878; Pesos del Modelo — Auto-Ajustados</h4>
+      <div id="weightsDisplay"><p class="pred-placeholder">&#9203; Cargando...</p></div>
+    </div>
+    <div class="panel">
+      <h4>&#128202; Post-Mortem: Predicción vs. Real</h4>
+      <div id="postMortemDisplay"><p class="pred-placeholder">&#9203; Aparece aquí la próxima vez que cargues datos nuevos.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="registro">
+<h2>⊕ Registrar Nuevo Sorteo</h2>
+<p class="lead">Ingresa los datos del sorteo campo por campo. Al guardar, el análisis completo se recalcula automáticamente con todos los datos de Supabase.</p>
+
+<div class="config-panel">
+  <h4>⚙ Configuración Supabase — pega aquí tus credenciales (se guardan en el navegador)</h4>
+  <div class="form-grid" style="grid-template-columns:1fr 1fr">
+    <div class="form-field">
+      <label>URL del Proyecto Supabase</label>
+      <input type="text" id="cfgUrl" placeholder="https://xxxxxxxxxxxx.supabase.co" autocomplete="off">
+    </div>
+    <div class="form-field">
+      <label>Anon / Public Key</label>
+      <input type="password" id="cfgKey" placeholder="eyJhbGciOiJI..." autocomplete="off">
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px;margin-top:4px;">
+    <button class="btn-save-cfg" onclick="saveConfig()">&#10003; Guardar configuración</button>
+    <span id="cfgStatus" style="color:var(--muted);font-size:12.5px"></span>
+  </div>
+</div>
+
+<div id="formStatus" class="status-bar"></div>
+
+<form id="sorteoForm" autocomplete="off">
+  <h3 style="margin-bottom:12px;color:var(--accent2)">Datos del nuevo sorteo</h3>
+  <div class="form-grid">
+    <div class="form-field">
+      <label>&#128197; Fecha</label>
+      <input type="date" id="fFecha" required>
+    </div>
+    <div class="form-field">
+      <label>&#128278; Tipo</label>
+      <select id="fTipo" required>
+        <option value="">— Seleccionar —</option>
+        <option value="Principal">Principal</option>
+        <option value="Secundario">Secundario</option>
+      </select>
+    </div>
+    <div class="form-field">
+      <label>N1 (1–43)</label>
+      <input type="number" id="fN1" min="1" max="43" required placeholder="ej. 7">
+    </div>
+    <div class="form-field">
+      <label>N2 (1–43)</label>
+      <input type="number" id="fN2" min="1" max="43" required placeholder="ej. 14">
+    </div>
+    <div class="form-field">
+      <label>N3 (1–43)</label>
+      <input type="number" id="fN3" min="1" max="43" required placeholder="ej. 22">
+    </div>
+    <div class="form-field">
+      <label>N4 (1–43)</label>
+      <input type="number" id="fN4" min="1" max="43" required placeholder="ej. 31">
+    </div>
+    <div class="form-field">
+      <label>N5 (1–43)</label>
+      <input type="number" id="fN5" min="1" max="43" required placeholder="ej. 38">
+    </div>
+    <div class="form-field">
+      <label>&#127919; Diferente (1–16)</label>
+      <input type="number" id="fDiff" min="1" max="16" required placeholder="ej. 5">
+    </div>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;align-items:center;">
+    <button type="submit" id="btnGuardar" class="btn-primary">&#128190; Guardar Sorteo</button>
+    <button type="button" id="btnReanalizar" class="btn-primary" style="background:var(--accent2);color:#0b0d12">&#128260; Re-Analizar (recargar BD)</button>
+  </div>
+</form>
+
+<h3 style="margin-top:28px;">&#128202; Últimos 30 registros en Supabase</h3>
+<div class="db-table-wrap">
+  <table class="tbl" id="tblRecientes">
+    <tr><th>Fecha</th><th>Tipo</th><th>N1</th><th>N2</th><th>N3</th><th>N4</th><th>N5</th><th>Diff</th></tr>
+  </table>
+</div>
+</section>
+
+<section id="resumen">
+<h2>Resumen Ejecutivo</h2>
+<p class="lead">Se analizaron <b id="resTotalRows">-</b> registros (<b id="resDraws">-</b> sorteos por tipo · <b id="resSpan">-</b> días). Dos universos independientes: <b>Principal</b> y <b>Secundario</b>. Cada uno con 5 números del 1 al 43 y 1 número "diferente" del 1 al 16.</p>
+
+<div class="kpi-grid" id="kpis"></div>
+
+<h3>Los 5 hallazgos clave</h3>
+<div class="bullet">1. <b>El generador pasa todos los tests de uniformidad</b>. Chi-cuadrado para números principales y diferentes no rechaza la hipótesis nula de distribución uniforme en <b>ningún</b> universo (p-values &gt; 0.49 en todos los casos). Estadísticamente, el generador se comporta como aleatorio bien calibrado.</div>
+<div class="bullet">2. <b>No hay autocorrelación ni rachas significativas</b>. El runs test sobre la suma (arriba/abajo de la mediana) y la autocorrelación a lags 1-10 arrojan valores cercanos a cero. No existe memoria detectable entre sorteos consecutivos.</div>
+<div class="bullet">3. <b>Existen desviaciones de frecuencia observadas pero NO significativas</b>. En Principal, los números <span class="chip hot">21</span>, <span class="chip hot">41</span>, <span class="chip hot">9</span> aparecen más de lo esperado; en Secundario, el <span class="chip hot">4</span>, <span class="chip hot">37</span>, <span class="chip hot">21</span>. Estas diferencias caben dentro del ruido muestral esperado — no son explotables como sesgo real.</div>
+<div class="bullet">4. <b>Sequías visibles actuales</b>. En Principal el <span class="chip cold">6</span>, <span class="chip cold">1</span>, <span class="chip cold">34</span> llevan 19-22 sorteos sin aparecer. En Secundario el <span class="chip cold">31</span>, <span class="chip cold">30</span>, <span class="chip cold">7</span> acumulan 30-37 sorteos de ausencia. Son sequías extremas pero estadísticamente posibles bajo uniformidad.</div>
+<div class="bullet">5. <b>Recomendación operativa</b>. Como los dos universos son independientes y sin sesgo explotable, NO existe una estrategia basada en datos que ofrezca ventaja real. Las combinaciones sugeridas en esta página son orientativas y deben interpretarse como <i>rankings de plausibilidad observada</i>, no como pronósticos con poder predictivo.</div>
+
+<div class="note warn"><b>Nota metodológica.</b> Este análisis se construyó bajo el supuesto de que los datos provienen de un generador pseudoaleatorio interno. Los hallazgos reportados son consistentes con un PRNG bien diseñado. Si el objetivo es detectar fallas del generador, los tests aquí usados (chi-cuadrado, runs, autocorrelación) <b>no encuentran evidencia</b> de tales fallas.</div>
+</section>
+
+<section id="eda">
+<h2>1. Exploración de Datos (EDA)</h2>
+<p class="lead">Calidad de datos evaluada: tipos, completitud, rangos válidos, duplicados y estructura temporal.</p>
+
+<div class="two-col">
+  <div class="panel">
+    <h4>Estructura del dataset</h4>
+    <table class="tbl">
+      <tr><th>Campo</th><th>Tipo</th><th>Observaciones</th></tr>
+      <tr><td>Fecha</td><td>Fecha (texto ES)</td><td>Formato "DD de Mes de YYYY" — se parseó a objeto date</td></tr>
+      <tr><td>Tipo de números</td><td>Categórico (2 niveles)</td><td>"Numero principales" y "Numeros Secundarios"</td></tr>
+      <tr><td>Números principales</td><td>5 × entero (1-43)</td><td>Cinco columnas ordenadas</td></tr>
+      <tr><td>Número diferente</td><td>Entero (1-16)</td><td>Universo independiente complementario</td></tr>
+    </table>
+  </div>
+  <div class="panel">
+    <h4>Calidad de datos</h4>
+    <table class="tbl">
+      <tr><th>Chequeo</th><th>Resultado</th></tr>
+      <tr><td>Valores faltantes</td><td><span class="badge-ok">0</span></td></tr>
+      <tr><td>Números principales fuera de rango (1-43)</td><td><span class="badge-ok">0</span></td></tr>
+      <tr><td>Números diferente fuera de rango (1-16)</td><td><span class="badge-ok">0</span></td></tr>
+      <tr><td>Filas con principal repetido (dentro del sorteo)</td><td><span class="badge-ok">0</span></td></tr>
+      <tr><td>Fechas con más de un registro por tipo</td><td><span class="badge-ok">0</span></td></tr>
+      <tr><td>Cobertura de rango (todos los 43 y 16 aparecen)</td><td><span class="badge-ok">Sí</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<h3>Cadencia temporal</h3>
+<p>Los sorteos ocurren con separaciones de <b>2, 3 o 4 días</b> (mediana: 3 días). Consistente con un calendario tipo L-M-V o similar. Los días de la semana efectivos dominantes son miércoles y sábado (índices 2 y 5), con algunos lunes.</p>
+
+<div class="chart-wrap"><canvas id="chartDow"></canvas></div>
+</section>
+
+<section id="frecuencias">
+<h2>2. Análisis de Frecuencias</h2>
+<p class="lead">Frecuencia observada de cada número en 360 sorteos. La línea roja representa la frecuencia esperada bajo uniformidad perfecta (<b>41.86</b> para principales, <b>22.50</b> para diferentes).</p>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="freqP">Principal — Números 1-43</button>
+  <button class="tab-btn" data-tab="freqS">Secundario — Números 1-43</button>
+  <button class="tab-btn" data-tab="diffP">Principal — Diferente 1-16</button>
+  <button class="tab-btn" data-tab="diffS">Secundario — Diferente 1-16</button>
+</div>
+
+<div class="tab-content active" id="freqP">
+  <div class="chart-wrap tall"><canvas id="chartFreqP"></canvas></div>
+</div>
+<div class="tab-content" id="freqS">
+  <div class="chart-wrap tall"><canvas id="chartFreqS"></canvas></div>
+</div>
+<div class="tab-content" id="diffP">
+  <div class="chart-wrap"><canvas id="chartDiffP"></canvas></div>
+</div>
+<div class="tab-content" id="diffS">
+  <div class="chart-wrap"><canvas id="chartDiffS"></canvas></div>
+</div>
+
+<h3>Top / Bottom por universo</h3>
+<div class="two-col">
+  <div class="panel">
+    <h4>Principal · top 10 más frecuentes</h4>
+    <table class="tbl" id="topP"></table>
+  </div>
+  <div class="panel">
+    <h4>Principal · 10 menos frecuentes</h4>
+    <table class="tbl" id="botP"></table>
+  </div>
+</div>
+<div class="two-col">
+  <div class="panel">
+    <h4>Secundario · top 10 más frecuentes</h4>
+    <table class="tbl" id="topS"></table>
+  </div>
+  <div class="panel">
+    <h4>Secundario · 10 menos frecuentes</h4>
+    <table class="tbl" id="botS"></table>
+  </div>
+</div>
+
+<h3>Distribución por decenas</h3>
+<p>Para validar si hay sesgo por rangos, agrupamos en decenas: D1 (1-10), D2 (11-20), D3 (21-30), D4 (31-40) y D5 (41-43 — rango parcial de 3 números).</p>
+<div class="chart-wrap"><canvas id="chartDecenas"></canvas></div>
+
+<h3>Métricas estructurales por sorteo</h3>
+<table class="tbl" id="tblStruct"></table>
+</section>
+
+<section id="uniformidad">
+<h2>3. Tests de Uniformidad — ¿El generador es aleatorio?</h2>
+<p class="lead">Aplicamos <b>chi-cuadrado de bondad de ajuste</b> contra una distribución uniforme. Si p-value &gt; 0.05, no rechazamos la hipótesis de uniformidad (= el generador se comporta como aleatorio).</p>
+
+<table class="tbl" id="tblChi"></table>
+
+<div class="note">Los cuatro tests arrojan p-values muy por encima del umbral de 0.05. <b>Conclusión estadística:</b> no hay evidencia de sesgo en las frecuencias del generador. Las desviaciones observadas (por ejemplo, que el 21 salga 57 veces y el 8 salga 31 veces) son consistentes con la varianza natural esperada en 360 sorteos.</div>
+
+<h3>¿Cuánto varía la frecuencia por puro azar?</h3>
+<p>Bajo uniformidad perfecta y 360 sorteos, cada número principal tiene una distribución aproximadamente Binomial(360, 5/43). Su desviación estándar es ≈ 6.1 apariciones. Por eso valores entre <b>~30 y ~54</b> son comunes sin ningún sesgo real. Las frecuencias observadas caen dentro de este intervalo en casi todos los casos.</p>
+</section>
+
+<section id="patrones">
+<h2>4. Patrones y Tendencias Temporales</h2>
+<p class="lead">Evolución de la suma de los 5 principales y su media móvil de 20 sorteos. La suma teórica esperada es ~110 (5 × 22). Movimientos grandes alrededor de este valor deben ser aleatorios — buscamos tendencias sostenidas.</p>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="tsP">Principal</button>
+  <button class="tab-btn" data-tab="tsS">Secundario</button>
+</div>
+<div class="tab-content active" id="tsP"><div class="chart-wrap tall"><canvas id="chartTsP"></canvas></div></div>
+<div class="tab-content" id="tsS"><div class="chart-wrap tall"><canvas id="chartTsS"></canvas></div></div>
+
+<h3>Runs test (Wald-Wolfowitz) sobre la suma</h3>
+<p>Codificamos cada sorteo como <b>A</b> si su suma supera la mediana, <b>B</b> si no. Contamos "runs" (rachas). Si el proceso es aleatorio, el número de runs debe ser cercano al esperado.</p>
+<table class="tbl" id="tblRuns"></table>
+
+<h3>Autocorrelación — ¿La suma de hoy predice la de mañana?</h3>
+<p>Coeficientes de autocorrelación de la suma a lags 1-10. Valores cercanos a 0 indican que el sorteo de hoy no tiene memoria del anterior.</p>
+<div class="chart-wrap"><canvas id="chartAcf"></canvas></div>
+
+<h3>¿Influye el día de la semana en la suma?</h3>
+<div class="chart-wrap"><canvas id="chartSumByDow"></canvas></div>
+</section>
+
+<section id="ciclos">
+<h2>5. Ciclos de Aparición — Gaps / Sequías</h2>
+<p class="lead">Para cada número analizamos el <b>gap</b> (sorteos entre apariciones consecutivas) y la <b>sequía actual</b> (sorteos desde su última aparición). Bajo uniformidad, el gap medio esperado es 43/5 ≈ <b>8.6 sorteos</b> para principales, y 16 sorteos para diferentes.</p>
+
+<h3>Números con mayor sequía actual — Principal</h3>
+<table class="tbl" id="tblDroughtP"></table>
+
+<h3>Números con mayor sequía actual — Secundario</h3>
+<table class="tbl" id="tblDroughtS"></table>
+
+<div class="note">Las sequías largas son estadísticamente posibles bajo aleatoriedad. Una sequía de 20 sorteos (2.3× el esperado) ocurre naturalmente con probabilidad ≈ 0.1 para cada número en una ventana larga. <b>No implican que el número "esté por salir"</b> — es la <i>falacia del jugador</i>. Cada sorteo es independiente.</div>
+
+<h3>Distribución de gaps promedio por número</h3>
+<div class="chart-wrap"><canvas id="chartGaps"></canvas></div>
+</section>
+
+<section id="pares">
+<h2>6. Pares y Tripletas Frecuentes</h2>
+<p class="lead">Analizamos coocurrencia de 2 y 3 números dentro del mismo sorteo. Frecuencia esperada para cualquier par específico bajo uniformidad: ≈ <b>4 veces en 360 sorteos</b>. Para tripletas: ≈ <b>0.3 veces</b>.</p>
+
+<div class="two-col">
+  <div class="panel">
+    <h4>Principal · Top 15 pares más frecuentes</h4>
+    <table class="tbl" id="tblPairsP"></table>
+  </div>
+  <div class="panel">
+    <h4>Secundario · Top 15 pares más frecuentes</h4>
+    <table class="tbl" id="tblPairsS"></table>
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="panel">
+    <h4>Principal · Top 10 tripletas</h4>
+    <table class="tbl" id="tblTripP"></table>
+  </div>
+  <div class="panel">
+    <h4>Secundario · Top 10 tripletas</h4>
+    <table class="tbl" id="tblTripS"></table>
+  </div>
+</div>
+
+<h3>Correlación entre número diferente y suma de principales</h3>
+<table class="tbl" id="tblCorr"></table>
+<div class="note">Correlaciones cercanas a 0 confirman la <b>independencia entre los dos universos</b>: conocer los principales no aporta información sobre el diferente.</div>
+
+<h3>Combinaciones completas repetidas</h3>
+<p id="repeatedCombos"></p>
+</section>
+
+<section id="hotcold">
+<h2>7. Números Calientes y Fríos (ventana 30 sorteos)</h2>
+<p class="lead">Frecuencia reciente en los últimos 30 sorteos de cada universo. "Calientes" han salido más que el promedio reciente; "fríos" apenas o nunca.</p>
+
+<div class="two-col">
+  <div class="panel">
+    <h4>🔥 Principal — top 10 calientes</h4>
+    <div id="hotP"></div>
+  </div>
+  <div class="panel">
+    <h4>❄ Principal — top 10 fríos</h4>
+    <div id="coldP"></div>
+  </div>
+</div>
+
+<div class="two-col">
+  <div class="panel">
+    <h4>🔥 Secundario — top 10 calientes</h4>
+    <div id="hotS"></div>
+  </div>
+  <div class="panel">
+    <h4>❄ Secundario — top 10 fríos</h4>
+    <div id="coldS"></div>
+  </div>
+</div>
+</section>
+
+<!-- ============== PREDICTIVO ============== -->
+<section id="predictivo">
+<h2>8. Modelo Predictivo Probabilístico</h2>
+<p class="lead">Ensemble de 3 señales ponderadas: frecuencia histórica (35%) + sequía actual / regresión a la media (40%) + coocurrencia con top frecuentes (25%). Salida: probabilidad ajustada por número para el próximo sorteo.</p>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="predP">Principal — Principales</button>
+  <button class="tab-btn" data-tab="predS">Secundario — Principales</button>
+  <button class="tab-btn" data-tab="predDiffP">Principal — Diferente</button>
+  <button class="tab-btn" data-tab="predDiffS">Secundario — Diferente</button>
+</div>
+<div class="tab-content active" id="predP">
+  <div class="chart-wrap tall"><canvas id="chartPredP"></canvas></div>
+  <table class="tbl" id="tblPredP"></table>
+</div>
+<div class="tab-content" id="predS">
+  <div class="chart-wrap tall"><canvas id="chartPredS"></canvas></div>
+  <table class="tbl" id="tblPredS"></table>
+</div>
+<div class="tab-content" id="predDiffP">
+  <div class="chart-wrap"><canvas id="chartPredDiffP"></canvas></div>
+</div>
+<div class="tab-content" id="predDiffS">
+  <div class="chart-wrap"><canvas id="chartPredDiffS"></canvas></div>
+</div>
+<div class="note crit"><b>Nivel de confianza.</b> Ninguna de estas combinaciones supera el 0.00000007% de probabilidad bajo uniformidad perfecta. El modelo otorga una ligera ventaja multiplicativa (~1.05-1.15×) — no distinguible de ruido estadístico. Úsense únicamente con fines exploratorios.</div>
+</section>
+
+<!-- ============== COMBOS ============== -->
+<section id="combos">
+<h2>9. Combinaciones Sugeridas</h2>
+<p class="lead">Tres estrategias: <b>(A)</b> Determinística (top 5 + top 1 diff). <b>(B)</b> Balanceada (mezcla de frecuentes, medianos y rezagados). <b>(C)</b> Ensemble probabilístico (5 combos por muestreo ponderado).</p>
+
+<h3>Universo Principal</h3>
+<div id="combosP"></div>
+
+<h3>Universo Secundario</h3>
+<div id="combosS"></div>
+
+<div class="note crit"><b>Nivel de confianza.</b> Ninguna de estas combinaciones supera 1 en 15.3M de probabilidad bajo uniformidad perfecta. El modelo otorga una ligera ventaja multiplicativa (~1.05-1.15×), no distinguible de ruido. Úsense únicamente con fines exploratorios.</div>
+</section>
+
+<!-- ============== HISTORIAL PREDICCIONES ============== -->
+<section id="historial-pred">
+<h2 style="color:#a78bfa;border-left-color:#a78bfa;">&#128196; Historial de Predicciones</h2>
+<p class="lead">Registro de cada predicción generada, los números reales que salieron, y cuántos acertó el modelo. El sistema rellena automáticamente los aciertos cuando se cargan nuevos sorteos. Usa este histórico para analizar las desviaciones y entender los patrones del generador.</p>
+
+<div class="note" style="font-size:12.5px;">
+  <b>&#9888; Requisito:</b> Esta sección requiere la tabla <code>predicciones</code> en Supabase.
+  Si ves un error o tabla vacía, ejecuta el archivo <b>predicciones_schema.sql</b> en el SQL Editor de Supabase.
+</div>
+
+<div class="tabs" style="margin-top:16px">
+  <button class="tab-btn active" data-tab="histP">Principal</button>
+  <button class="tab-btn" data-tab="histS">Secundario</button>
+</div>
+<div class="tab-content active" id="histP">
+  <div id="tblHistP"><p class="pred-placeholder">&#9203; Cargando historial de predicciones...</p></div>
+</div>
+<div class="tab-content" id="histS">
+  <div id="tblHistS"><p class="pred-placeholder">&#9203; Cargando historial de predicciones...</p></div>
+</div>
+</section>
+
+<!-- ============== POWER BI ============== -->
+<section id="powerbi">
+<h2>10. Dashboard Sugerido para Power BI</h2>
+<p class="lead">Arquitectura recomendada para replicar este análisis en Power BI con refresco automático al cargar nuevos sorteos desde Supabase.</p>
+
+<h3>Página 1 — Resumen ejecutivo (KPIs)</h3>
+<div class="bullet"><b>Tarjetas KPI:</b> Total de sorteos · Última fecha · Número más frecuente (Principal/Secundario) · Número más rezagado · Suma promedio · P-value chi-cuadrado (con semáforo verde/rojo).</div>
+<div class="bullet"><b>Slicers:</b> Tipo (Principal / Secundario) · Rango de fechas · Año · Mes.</div>
+
+<h3>Página 2 — Frecuencias</h3>
+<div class="bullet"><b>Visuales:</b> Gráfico de barras horizontal ordenado por frecuencia · Línea de referencia con la frecuencia esperada · Tabla matriz "Número × Año" con formato condicional (heatmap).</div>
+
+<h3>Página 3 — Tendencias</h3>
+<div class="bullet"><b>Visuales:</b> Line chart de la suma por fecha con media móvil · Column chart de frecuencia por día de la semana · Área stacked de apariciones por decena/mes.</div>
+
+<h3>Página 4 — Gaps y Sequías</h3>
+<div class="bullet"><b>Visuales:</b> Tabla ordenable "Número / Gap medio / Gap máx / Sequía actual" · Scatter plot (X=frecuencia, Y=sequía actual) · Indicador visual (semáforo) por número.</div>
+
+<h3>Página 5 — Coocurrencia</h3>
+<div class="bullet"><b>Visuales:</b> Heatmap 43×43 de pares (superior-triangular) · Top-N pares con gráfico de barras · Network diagram de los 30 pares más fuertes.</div>
+
+<h3>DAX clave</h3>
+<pre style="background:#1a1f2a;padding:14px;border-radius:6px;overflow-x:auto;font-size:12.5px;color:#c5e1ff;border:1px solid var(--border)"><code>Frecuencia Esperada = DIVIDE(COUNTROWS(Sorteos) * 5, 43)
+Z-Score Frecuencia = DIVIDE([Frec Observada] - [Frec Esperada], SQRT([Frec Esperada] * (1 - 5/43)))</code></pre>
+</section>
+
+<!-- ============== CONCLUSIONES ============== -->
+<section id="conclusiones">
+<h2>11. Conclusiones y Próximos Pasos</h2>
+<p class="lead">Síntesis de hallazgos estadísticos y hoja de ruta para análisis avanzados.</p>
+
+<h3>Hallazgos principales</h3>
+<div class="bullet"><b>Uniformidad confirmada.</b> Todos los tests chi-cuadrado no rechazan la hipótesis nula de distribución uniforme (α=0.05). El generador está bien calibrado estadísticamente.</div>
+<div class="bullet"><b>Sin memoria detectable.</b> El runs test y la función de autocorrelación (lags 1-10) arrojan valores consistentes con independencia serial. No existe patrón temporal explotable.</div>
+<div class="bullet"><b>Sequías dentro del rango esperado.</b> Los gaps extremos observados son estadísticamente posibles bajo uniformidad, no son indicadores de sesgo.</div>
+<div class="bullet"><b>Base de datos dinámica.</b> Con el formulario integrado y la conexión a Supabase, el análisis se recalcula automáticamente con cada nuevo sorteo registrado.</div>
+
+<h3>Próximos pasos</h3>
+<div class="bullet"><b>Aumentar la muestra.</b> A medida que se acumulen más sorteos (objetivo: 500+), los tests estadísticos ganarán potencia para detectar sesgos marginales si existieran.</div>
+<div class="bullet"><b>Ponderación temporal.</b> Incorporar decaimiento exponencial de sorteos antiguos en el predictor para capturar posibles cambios de distribución.</div>
+
+<div class="note warn"><b>Recordatorio metodológico.</b> Este sistema es análisis estadístico descriptivo. Ningún modelo puede predecir el siguiente resultado de un generador verdaderamente aleatorio con ventaja real sobre el azar.</div>
+</section>
+
+<footer><p style="text-align:center;color:var(--muted);font-size:12.5px;padding:20px 0;border-top:1px solid var(--border)">Análisis Cuantitativo · Datos en vivo desde Supabase · Se recalcula con cada nuevo sorteo registrado</p></footer>
+
+<script>
+// ============================================================
+// SUPABASE CONFIG  (se guarda en localStorage)
+// ============================================================
+let _sbUrl = localStorage.getItem('sbUrl') || '';
+let _sbKey  = localStorage.getItem('sbKey')  || '';
+let _sb     = null;
+
+// ============================================================
+// ADAPTIVE WEIGHT SYSTEM
+// ============================================================
+const _WEIGHTS_DEFAULT = {freq:0.35, drought:0.40, cooc:0.25};
+let _weights = {..._WEIGHTS_DEFAULT};
+try{
+  const w = JSON.parse(localStorage.getItem('modelWeights')||'null');
+  if(w && typeof w.freq==='number' && typeof w.drought==='number' && typeof w.cooc==='number')
+    _weights = {freq:w.freq, drought:w.drought, cooc:w.cooc};
+}catch(e){}
+
+function initSupabase(url, key){
+  if(!url||!key) return false;
+  try { _sb = window.supabase.createClient(url, key); return true; }
+  catch(e){ return false; }
+}
+
+function saveConfig(){
+  _sbUrl = document.getElementById('cfgUrl').value.trim();
+  _sbKey  = document.getElementById('cfgKey').value.trim();
+  if(!_sbUrl||!_sbKey){ document.getElementById('cfgStatus').textContent='⚠ Completa ambos campos.'; return; }
+  localStorage.setItem('sbUrl',_sbUrl);
+  localStorage.setItem('sbKey',_sbKey);
+  if(initSupabase(_sbUrl,_sbKey)){
+    document.getElementById('cfgStatus').textContent='✓ Guardado. Cargando datos…';
+    loadAndRender();
+  } else {
+    document.getElementById('cfgStatus').textContent='✗ Error al inicializar Supabase.';
+  }
+}
+
+// ============================================================
+// CHART REGISTRY (destroy before recreate)
+// ============================================================
+const _charts = {};
+function safeChart(id, cfg){
+  const existing = Chart.getChart(document.getElementById(id));
+  if(existing) existing.destroy();
+  return new Chart(document.getElementById(id), cfg);
+}
+
+// ============================================================
+// MATH HELPERS
+// ============================================================
+function stdNormCDF(z){
+  const t=1/(1+0.2316419*Math.abs(z));
+  const p=1-(1/Math.sqrt(2*Math.PI))*Math.exp(-z*z/2)*t*(0.319381530+t*(-0.356563782+t*(1.781477937+t*(-1.821255978+t*1.330274429))));
+  return z>=0?p:1-p;
+}
+function chiSquarePValue(chi2,df){
+  if(df<=0||chi2<=0) return 1;
+  const z=Math.cbrt(chi2/df)-(1-2/(9*df));
+  return Math.max(0,Math.min(1,1-stdNormCDF(z/Math.sqrt(2/(9*df)))));
+}
+function pearsonCorr(x,y){
+  const n=x.length; if(n<2) return 0;
+  const mx=x.reduce((a,b)=>a+b,0)/n, my=y.reduce((a,b)=>a+b,0)/n;
+  let num=0,dx=0,dy=0;
+  for(let i=0;i<n;i++){num+=(x[i]-mx)*(y[i]-my);dx+=(x[i]-mx)**2;dy+=(y[i]-my)**2;}
+  return dx===0||dy===0?0:num/Math.sqrt(dx*dy);
+}
+function movingAvg(arr,w){
+  return arr.map((_,i)=>i<w-1?null:arr.slice(i-w+1,i+1).reduce((a,b)=>a+b,0)/w);
+}
+function weightedSample(items,wts,n){
+  const it=[...items],ww=[...wts],res=[];
+  for(let i=0;i<n&&it.length>0;i++){
+    const tot=ww.reduce((a,b)=>a+b,0);
+    let r=Math.random()*tot,idx=0;
+    for(;idx<ww.length-1;idx++){r-=ww[idx];if(r<=0)break;}
+    res.push(it[idx]);it.splice(idx,1);ww.splice(idx,1);
+  }
+  return res;
+}
+function showStatus(msg,type){
+  const el=document.getElementById('formStatus');
+  el.textContent=msg; el.className='status-bar show '+type;
+}
+
+// ============================================================
+// STATISTICAL COMPUTATION ENGINE
+// ============================================================
+function computeFreq(draws){
+  const n=draws.length; if(n===0) return null;
+  const fm={},fd={};
+  for(let i=1;i<=43;i++) fm[i]=0;
+  for(let i=1;i<=16;i++) fd[i]=0;
+  const sa=[],ea=[],ha=[];
+  for(const r of draws){
+    const nums=[r.n1,r.n2,r.n3,r.n4,r.n5];
+    nums.forEach(x=>fm[x]++); fd[r.diff]++;
+    const s=nums.reduce((a,b)=>a+b,0);
+    sa.push(s); ea.push(nums.filter(x=>x%2===0).length); ha.push(nums.filter(x=>x>=22).length);
+  }
+  const smean=sa.reduce((a,b)=>a+b,0)/n;
+  const sstd=Math.sqrt(sa.reduce((a,b)=>a+(b-smean)**2,0)/n);
+  const expM=(n*5)/43, expD=n/16;
+  let chiM=0,chiD=0;
+  for(let i=1;i<=43;i++) chiM+=(fm[i]-expM)**2/expM;
+  for(let i=1;i<=16;i++) chiD+=(fd[i]-expD)**2/expD;
+  const ma=Object.entries(fm).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
+  const da=Object.entries(fd).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
+  const dec={'D1(1-10)':0,'D2(11-20)':0,'D3(21-30)':0,'D4(31-40)':0,'D5(41-43)':0};
+  for(let i=1;i<=10;i++) dec['D1(1-10)']+=fm[i];
+  for(let i=11;i<=20;i++) dec['D2(11-20)']+=fm[i];
+  for(let i=21;i<=30;i++) dec['D3(21-30)']+=fm[i];
+  for(let i=31;i<=40;i++) dec['D4(31-40)']+=fm[i];
+  for(let i=41;i<=43;i++) dec['D5(41-43)']+=fm[i];
+  return {freq_main:fm,freq_diff:fd,top10_main:ma.slice(0,10),bottom10_main:ma.slice(-10).reverse(),
+    top10_diff:da.slice(0,5),bottom5_diff:da.slice(-5).reverse(),
+    sum_mean:smean,sum_std:sstd,sum_min:Math.min(...sa),sum_max:Math.max(...sa),
+    even_mean:ea.reduce((a,b)=>a+b,0)/n,high_mean:ha.reduce((a,b)=>a+b,0)/n,
+    exp_main:expM,exp_diff:expD,chi_main:chiM,chi_diff:chiD,
+    p_main:chiSquarePValue(chiM,42),p_diff:chiSquarePValue(chiD,15),decades:dec};
+}
+
+function computePatterns(draws){
+  const n=draws.length; if(n===0) return null;
+  const dd={0:0,1:0,2:0,3:0,4:0,5:0,6:0};
+  const sbdr={0:[],1:[],2:[],3:[],4:[],5:[],6:[]};
+  const sums=[];
+  for(const r of draws){
+    const d=new Date(r.fecha+'T00:00:00');
+    const dow=(d.getDay()+6)%7;
+    dd[dow]++; const s=r.n1+r.n2+r.n3+r.n4+r.n5;
+    sbdr[dow].push(s); sums.push(s);
+  }
+  const sbd={};
+  for(const k in sbdr) sbd[k]=sbdr[k].length>0?sbdr[k].reduce((a,b)=>a+b,0)/sbdr[k].length:0;
+  // Runs test
+  const sorted=[...sums].sort((a,b)=>a-b);
+  const med=sorted[Math.floor(n/2)];
+  const sg=sums.map(s=>s>=med?1:0);
+  let runs=1; for(let i=1;i<sg.length;i++) if(sg[i]!==sg[i-1]) runs++;
+  const n1=sg.filter(x=>x===1).length,n2=sg.filter(x=>x===0).length;
+  const eR=(2*n1*n2)/(n1+n2)+1;
+  const vR=(2*n1*n2*(2*n1*n2-n1-n2))/((n1+n2)**2*(n1+n2-1));
+  const zR=(runs-eR)/Math.sqrt(Math.max(vR,0.0001));
+  const pR=Math.min(1,2*(1-stdNormCDF(Math.abs(zR))));
+  // ACF
+  const smean=sums.reduce((a,b)=>a+b,0)/n;
+  const svar=sums.reduce((a,b)=>a+(b-smean)**2,0)/n;
+  const acf={};
+  for(let lag=1;lag<=10;lag++){
+    let cov=0; for(let i=lag;i<n;i++) cov+=(sums[i]-smean)*(sums[i-lag]-smean);
+    acf[lag]=svar>0?(cov/n)/svar:0;
+  }
+  // Gaps
+  const gbn={};
+  for(let i=1;i<=43;i++) gbn[i]={current_drought:0,n_apar:0,gap_mean:0,gap_max:0};
+  const ls={}; for(let i=1;i<=43;i++) ls[i]=-1;
+  const gl={}; for(let i=1;i<=43;i++) gl[i]=[];
+  for(let i=0;i<draws.length;i++){
+    const r=draws[i]; const nums=[r.n1,r.n2,r.n3,r.n4,r.n5];
+    for(let num=1;num<=43;num++){
+      if(nums.includes(num)){
+        gbn[num].n_apar++; if(ls[num]>=0) gl[num].push(i-ls[num]);
+        ls[num]=i; gbn[num].current_drought=0;
+      } else { gbn[num].current_drought++; }
+    }
+  }
+  for(let i=1;i<=43;i++){
+    const g=gl[i];
+    gbn[i].gap_mean=g.length>0?g.reduce((a,b)=>a+b,0)/g.length:0;
+    gbn[i].gap_max=g.length>0?Math.max(...g):0;
+  }
+  // Hot/cold
+  const rec=draws.slice(-20);
+  const rf={}; for(let i=1;i<=43;i++) rf[i]=0;
+  for(const r of rec) [r.n1,r.n2,r.n3,r.n4,r.n5].forEach(x=>rf[x]++);
+  const ra=Object.entries(rf).map(([k,v])=>[+k,v]);
+  return {dow_dist:dd,sum_by_dow:sbd,
+    runs_test:{runs,expected:eR,z:zR,p_value:pR},acf,gaps_by_num:gbn,
+    recent_hot:[...ra].sort((a,b)=>b[1]-a[1]).slice(0,15),
+    recent_cold:[...ra].sort((a,b)=>a[1]-b[1]).slice(0,15)};
+}
+
+function computePairs(draws){
+  const n=draws.length; if(n===0) return null;
+  const pc={},tc={};
+  const seen=new Set(); let rep=0;
+  const da=[],aa=[],sa=[];
+  for(const r of draws){
+    const nums=[r.n1,r.n2,r.n3,r.n4,r.n5].sort((a,b)=>a-b);
+    const ck=nums.join(',')+':'+r.diff;
+    if(seen.has(ck)) rep++; seen.add(ck);
+    da.push(r.diff); aa.push(nums.reduce((a,b)=>a+b,0)/5); sa.push(nums.reduce((a,b)=>a+b,0));
+    for(let i=0;i<5;i++){
+      for(let j=i+1;j<5;j++){
+        const pk=`${nums[i]}-${nums[j]}`; pc[pk]=(pc[pk]||0)+1;
+        for(let k=j+1;k<5;k++){
+          const tk=`${nums[i]}-${nums[j]}-${nums[k]}`; tc[tk]=(tc[tk]||0)+1;
+        }
+      }
+    }
+  }
+  const tp=Object.entries(pc).map(([k,v])=>{const p=k.split('-').map(Number);return[[p[0],p[1]],v];}).sort((a,b)=>b[1]-a[1]).slice(0,20);
+  const tt=Object.entries(tc).map(([k,v])=>{const p=k.split('-').map(Number);return[[p[0],p[1],p[2]],v];}).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  return {top_pairs:tp,top_triples:tt,exp_pair:n*10/903,exp_triple:n*10/12341,
+    corr_diff_avg:pearsonCorr(da,aa),corr_diff_sum:pearsonCorr(da,sa),repeated_full:rep,pair_count:pc};
+}
+
+// ============================================================
+// POST-MORTEM PERSISTENCE
+// ============================================================
+function storeLastPostMortem(html){
+  try{ localStorage.setItem('lastPostMortem', html); }catch(e){}
+}
+function loadLastPostMortem(){
+  try{ return localStorage.getItem('lastPostMortem')||''; }catch(e){ return ''; }
+}
+
+// ============================================================
+// SUPABASE: PREDICCIONES TABLE
+// ============================================================
+async function savePredictionToSupabase(ultimoSorteo, predP, predS, weights){
+  if(!_sb) return;
+  const today = new Date().toISOString().split('T')[0];
+  for(const [tipo, pred] of [['Principal',predP],['Secundario',predS]]){
+    if(!pred||!pred.combo_deterministic_top5) continue;
+    const bal = pred.combo_balanced.slice(0,5).sort((a,b)=>a-b);
+    const row = {
+      tipo, generada_en: today, ultimo_sorteo: ultimoSorteo,
+      d1:pred.combo_deterministic_top5[0], d2:pred.combo_deterministic_top5[1],
+      d3:pred.combo_deterministic_top5[2], d4:pred.combo_deterministic_top5[3],
+      d5:pred.combo_deterministic_top5[4], d_diff:pred.combo_deterministic_diff,
+      b1:bal[0], b2:bal[1], b3:bal[2], b4:bal[3], b5:bal[4],
+      b_diff: pred.ranking_diff[0][0],
+      w_freq:+weights.freq.toFixed(4), w_sequia:+weights.drought.toFixed(4), w_cooc:+weights.cooc.toFixed(4)
+    };
+    try{
+      await _sb.from('predicciones').upsert(row, {onConflict:'tipo,ultimo_sorteo', ignoreDuplicates:true});
+    }catch(e){ console.warn('savePrediction error:',e.message); }
+  }
+}
+
+async function loadPredictionHistory(){
+  if(!_sb) return [];
+  try{
+    const {data,error}=await _sb.from('predicciones').select('*').order('ultimo_sorteo',{ascending:false}).limit(60);
+    if(error){ console.warn('loadPredHistory:',error.message); return []; }
+    return data||[];
+  }catch(e){ return []; }
+}
+
+async function fillPredictionResults(predHistory, sorteoRecords){
+  if(!_sb||!predHistory.length) return;
+  const unresolved = predHistory.filter(p=>p.aciertos_det===null||p.aciertos_det===undefined);
+  for(const pred of unresolved){
+    // Solo llenar si el sorteo real ocurrió DESPUÉS de que se generó la predicción
+    // Esto evita vincular resultados que ya existían cuando se guardó la predicción
+    const predGeneradaEn = pred.generada_en; // 'YYYY-MM-DD' when prediction was saved
+    const nextActual = sorteoRecords
+      .filter(r=>r.tipo===pred.tipo && r.fecha>pred.ultimo_sorteo && r.fecha>=predGeneradaEn)
+      .sort((a,b)=>a.fecha.localeCompare(b.fecha))[0];
+    if(!nextActual) continue;
+    const det=[pred.d1,pred.d2,pred.d3,pred.d4,pred.d5];
+    const bal=[pred.b1,pred.b2,pred.b3,pred.b4,pred.b5];
+    const actual=[nextActual.n1,nextActual.n2,nextActual.n3,nextActual.n4,nextActual.n5];
+    const acDet=det.filter(n=>actual.includes(n)).length;
+    const acBal=bal.filter(n=>actual.includes(n)).length;
+    const diffOk=pred.d_diff===nextActual.diff;
+    try{
+      await _sb.from('predicciones').update({
+        resultado_fecha:nextActual.fecha,
+        r1:nextActual.n1, r2:nextActual.n2, r3:nextActual.n3, r4:nextActual.n4, r5:nextActual.n5,
+        r_diff:nextActual.diff, aciertos_det:acDet, aciertos_bal:acBal, diff_acertado:diffOk
+      }).eq('id',pred.id);
+    }catch(e){ console.warn('fillResults error:',e.message); }
+  }
+}
+
+function renderPredictionHistory(history){
+  if(!history||!history.length)
+    return '<p class="pred-placeholder">&#9203; Sin predicciones aún. Se guardan automáticamente con cada análisis. Si ya cargaste datos, ejecuta <b>predicciones_schema.sql</b> en Supabase.</p>';
+
+  const resolved=history.filter(p=>p.aciertos_det!==null&&p.aciertos_det!==undefined);
+  let summary='';
+  if(resolved.length>0){
+    const avgDet=(resolved.reduce((a,p)=>a+p.aciertos_det,0)/resolved.length).toFixed(2);
+    const avgBal=(resolved.reduce((a,p)=>a+p.aciertos_bal,0)/resolved.length).toFixed(2);
+    const best=resolved.reduce((a,p)=>p.aciertos_det>a?p.aciertos_det:a,0);
+    const diffHits=resolved.filter(p=>p.diff_acertado).length;
+    summary=`<div class="hist-kpi-mini">
+      <div class="kpi"><div class="lbl">Predicciones resueltas</div><div class="val">${resolved.length}</div></div>
+      <div class="kpi"><div class="lbl">Aciertos prom. (det.)</div><div class="val">${avgDet}</div><div class="sub">de 5 posibles</div></div>
+      <div class="kpi"><div class="lbl">Aciertos prom. (bal.)</div><div class="val">${avgBal}</div></div>
+      <div class="kpi"><div class="lbl">Mejor resultado</div><div class="val">${best}/5</div></div>
+      <div class="kpi"><div class="lbl">Diff acertado</div><div class="val">${diffHits}</div><div class="sub">de ${resolved.length}</div></div>
+    </div>`;
+  }
+
+  function balls(nums, actuals){
+    return nums.map(n=>{
+      const hit=actuals&&actuals.includes(n);
+      return `<span class="hist-ball ${hit?'hit':'miss'}">${n}</span>`;
+    }).join(' ');
+  }
+
+  let rows='<tr><th>Sorteo base</th><th>Combo Det.</th><th>Combo Bal.</th><th>Resultado real</th><th>Ac. Det.</th><th>Ac. Bal.</th><th>Pesos f/s/c</th></tr>';
+  for(const p of history){
+    const det=[p.d1,p.d2,p.d3,p.d4,p.d5];
+    const bal=[p.b1,p.b2,p.b3,p.b4,p.b5];
+    const actual=p.r1!=null?[p.r1,p.r2,p.r3,p.r4,p.r5]:null;
+    const sc=n=>n>=3?'color:#4ade80':(n>=1?'color:#ffb53e':'color:#f87171');
+    const resCells=actual
+      ?`<td style="font-size:11.5px">${balls(actual,null)} <span class="chip">+${p.r_diff}</span></td>
+         <td class="num"><b style="${sc(p.aciertos_det)}">${p.aciertos_det}/5${p.diff_acertado?' ✓':''}</b></td>
+         <td class="num"><b style="${sc(p.aciertos_bal)}">${p.aciertos_bal}/5</b></td>`
+      :`<td style="color:#6b7280;font-size:12px">&#9203; Pendiente</td><td>—</td><td>—</td>`;
+    rows+=`<tr>
+      <td style="font-size:12px;white-space:nowrap">${p.ultimo_sorteo}</td>
+      <td>${balls(det,actual)} <span class="chip">+${p.d_diff}</span></td>
+      <td>${balls(bal,actual)} <span class="chip">+${p.b_diff}</span></td>
+      ${resCells}
+      <td style="font-size:11px;color:var(--muted)">${(p.w_freq*100).toFixed(0)}/${(p.w_sequia*100).toFixed(0)}/${(p.w_cooc*100).toFixed(0)}</td>
+    </tr>`;
+  }
+  return `${summary}<div style="overflow-x:auto"><table class="tbl" style="font-size:12px">${rows}</table></div>`;
+}
+
+// ============================================================
+// COMPONENT SCORING (for weight learning)
+// ============================================================
+function computeComponentScores(draws){
+  if(!draws||draws.length===0) return null;
+  const freq={},drought={},cooc={};
+  for(let i=1;i<=43;i++){freq[i]=0;drought[i]=0;cooc[i]=0;}
+  for(const r of draws) [r.n1,r.n2,r.n3,r.n4,r.n5].forEach(x=>freq[x]++);
+  // Current drought at end of series
+  for(let num=1;num<=43;num++) drought[num]=0;
+  for(let i=0;i<draws.length;i++){
+    const nums=[draws[i].n1,draws[i].n2,draws[i].n3,draws[i].n4,draws[i].n5];
+    for(let num=1;num<=43;num++){
+      if(nums.includes(num)) drought[num]=0;
+      else drought[num]++;
+    }
+  }
+  // Co-occurrence with top-5 most frequent
+  const pairs={};
+  for(const r of draws){
+    const nums=[r.n1,r.n2,r.n3,r.n4,r.n5].sort((a,b)=>a-b);
+    for(let i=0;i<5;i++) for(let j=i+1;j<5;j++){
+      const pk=`${nums[i]}-${nums[j]}`;pairs[pk]=(pairs[pk]||0)+1;
+    }
+  }
+  const top5=Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,5).map(x=>+x[0]);
+  for(let i=1;i<=43;i++){
+    let s=0;
+    for(const j of top5){
+      if(i===j) continue;
+      const a=Math.min(i,j),b=Math.max(i,j);
+      s+=(pairs[`${a}-${b}`]||0);
+    }
+    cooc[i]=s;
+  }
+  return {freq,drought,cooc};
+}
+
+// Grade how well each component ranked actual drawn numbers
+// Higher avg rank (out of 43) = component predicted those numbers better
+function gradeComponents(draws, lastN=20){
+  if(draws.length < lastN+10) return {freq:22,drought:22,cooc:22,count:0};
+  const trainDraws=draws.slice(0,-lastN);
+  const testDraws=draws.slice(-lastN);
+  const sc=computeComponentScores(trainDraws);
+  if(!sc) return {freq:22,drought:22,cooc:22,count:0};
+  // Build rank arrays: sorted ascending → index 0 = lowest score, index 42 = highest
+  const nums43=Array.from({length:43},(_,i)=>i+1);
+  const freqArr=[...nums43].sort((a,b)=>sc.freq[a]-sc.freq[b]);
+  const droughtArr=[...nums43].sort((a,b)=>sc.drought[a]-sc.drought[b]);
+  const coocArr=[...nums43].sort((a,b)=>sc.cooc[a]-sc.cooc[b]);
+  let tf=0,td=0,tc=0,count=0;
+  for(const draw of testDraws){
+    const actuals=[draw.n1,draw.n2,draw.n3,draw.n4,draw.n5];
+    for(const n of actuals){
+      tf+=freqArr.indexOf(n)+1;
+      td+=droughtArr.indexOf(n)+1;
+      tc+=coocArr.indexOf(n)+1;
+      count++;
+    }
+  }
+  if(count===0) return {freq:22,drought:22,cooc:22,count:0};
+  return {freq:tf/count, drought:td/count, cooc:tc/count, count};
+}
+
+// Adjust weights proportionally to how well each component performed
+function adjustWeights(currentWeights, grades){
+  if(!grades||grades.count===0) return currentWeights;
+  // Raw grades normalized (22 = baseline/random)
+  const rf=Math.max(0.05, grades.freq/22);
+  const rd=Math.max(0.05, grades.drought/22);
+  const rc=Math.max(0.05, grades.cooc/22);
+  const tot=rf+rd+rc;
+  const newW={freq:rf/tot, drought:rd/tot, cooc:rc/tot};
+  // Blend: 70% current + 30% data-driven new
+  const blended={
+    freq:   0.70*currentWeights.freq   + 0.30*newW.freq,
+    drought:0.70*currentWeights.drought + 0.30*newW.drought,
+    cooc:   0.70*currentWeights.cooc   + 0.30*newW.cooc
+  };
+  // Clamp [0.05, 0.70]
+  for(const k of ['freq','drought','cooc'])
+    blended[k]=Math.min(0.70,Math.max(0.05,blended[k]));
+  const s=blended.freq+blended.drought+blended.cooc;
+  blended.freq/=s; blended.drought/=s; blended.cooc/=s;
+  return blended;
+}
+
+// Store the prediction for future post-mortem
+function storePrediction(latestDrawDate, predP, predS){
+  const stored={
+    storedAt: new Date().toISOString(),
+    latestDrawDate,
+    Principal:{nums:[...predP.combo_deterministic_top5], diff:predP.combo_deterministic_diff},
+    Secundario:{nums:[...predS.combo_deterministic_top5], diff:predS.combo_deterministic_diff}
+  };
+  try{localStorage.setItem('lastPrediction', JSON.stringify(stored));}catch(e){}
+  return stored;
+}
+
+function loadStoredPrediction(){
+  try{return JSON.parse(localStorage.getItem('lastPrediction')||'null');}catch(e){return null;}
+}
+
+// Build post-mortem HTML comparing stored prediction vs actual draws
+function buildPostMortemHTML(stored, allDraws){
+  if(!stored||!stored.latestDrawDate){
+    const last=loadLastPostMortem();
+    return last||'<p class="pred-placeholder">&#9203; El análisis post-mortem aparece aquí la próxima vez que cargues datos nuevos.</p>';
+  }
+  const newDraws=allDraws.filter(r=>r.fecha>stored.latestDrawDate);
+  if(newDraws.length===0){
+    const last=loadLastPostMortem();
+    return last||'<p class="pred-placeholder">&#10003; Predicción guardada. El análisis aparecerá cuando registres el próximo sorteo.</p>';
+  }
+  let html='';
+  for(const tipo of ['Principal','Secundario']){
+    const pred=stored[tipo];
+    const actual=[...newDraws].filter(r=>r.tipo===tipo).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+    if(!actual||!pred) continue;
+    const actualNums=[actual.n1,actual.n2,actual.n3,actual.n4,actual.n5];
+    const hits=pred.nums.filter(n=>actualNums.includes(n));
+    const misses=pred.nums.filter(n=>!actualNums.includes(n));
+    const surprises=actualNums.filter(n=>!pred.nums.includes(n));
+    const diffHit=pred.diff===actual.diff;
+    const hc=hits.length;
+    const scoreColor=hc>=3?'#4ade80':(hc>=1?'#ffb53e':'#f87171');
+    const titleColor=tipo==='Principal'?'#4ade80':'#93c5fd';
+    html+=`<div class="postmortem-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="color:${titleColor};font-weight:700;font-size:12.5px">${tipo} · ${actual.fecha}</span>
+        <span class="score-badge" style="background:${scoreColor}22;color:${scoreColor}">${hc}/5 aciertos${diffHit?' + diff ✓':''}</span>
+      </div>
+      <div class="pm-row">
+        <span class="pm-label">Predicho</span>
+        <div class="pm-balls">${pred.nums.map(n=>`<span class="ball-sm ${hits.includes(n)?'ball-hit':'ball-miss'}">${n}</span>`).join('')}<span class="pm-sep">+</span><span class="ball-sm ${diffHit?'ball-hit-d':'ball-miss-d'}">${pred.diff}</span></div>
+      </div>
+      <div class="pm-row">
+        <span class="pm-label">Real</span>
+        <div class="pm-balls">${actualNums.map(n=>`<span class="ball-sm ${hits.includes(n)?'ball-hit':'ball-surp'}">${n}</span>`).join('')}<span class="pm-sep">+</span><span class="ball-sm ${diffHit?'ball-hit-d':'ball-surp-d'}">${actual.diff}</span></div>
+      </div>`;
+    if(surprises.length>0){
+      html+=`<div style="margin-top:8px;font-size:11.5px;color:var(--muted)">
+        <b style="color:#fbbf24">Inesperados:</b> ${surprises.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
+        <span style="color:#6b7280"> — tenían probabilidad positiva en el modelo pero fuera del top-5</span>
+      </div>`;
+    }
+    if(misses.length>0){
+      html+=`<div style="font-size:11.5px;color:var(--muted);margin-top:4px">
+        <b style="color:#f87171">Fallados:</b> ${misses.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
+        <span style="color:#6b7280"> — el modelo los priorizó pero no salieron</span>
+      </div>`;
+    }
+    html+=`</div>`;
+  }
+  const result=html||'<p class="pred-placeholder">Sin nuevos sorteos para comparar.</p>';
+  if(html) storeLastPostMortem(result);
+  return result;
+}
+
+// Build weights display HTML
+function buildWeightsHTML(weights, grades){
+  const d=_WEIGHTS_DEFAULT;
+  function row(label,key,color){
+    const pct=(weights[key]*100).toFixed(1);
+    const delta=((weights[key]-d[key])*100);
+    const dStr=(delta>=0?'+':'')+delta.toFixed(1)+'%';
+    const dColor=delta>0.5?'#86efac':(delta<-0.5?'#f87171':'#9ca3af');
+    return `<div class="weight-row">
+      <div class="weight-label">${label}<br><small style="color:var(--muted)">${pct}%</small></div>
+      <div class="weight-bar-wrap"><div class="weight-bar" style="width:${pct}%;background:${color}"></div></div>
+      <div class="weight-delta" style="color:${dColor}">${dStr}</div>
+    </div>`;
+  }
+  let perf='';
+  if(grades&&grades.count>0){
+    const e=22;
+    function pLabel(v){const p=((v/e-1)*100).toFixed(1);const c=+p>0?'#86efac':'#f87171';return `<b style="color:${c}">${+p>0?'+':''}${p}%</b>`;}
+    perf=`<div style="font-size:11px;color:var(--muted);margin-top:10px;padding:8px;background:var(--panel2);border-radius:6px">
+      <b style="color:#bfd3ff">Rendimiento componentes (últimos 20 sorteos):</b><br>
+      Frecuencia: ${pLabel(grades.freq)} · Sequía: ${pLabel(grades.drought)} · Coocurrencia: ${pLabel(grades.cooc)}<br>
+      <span style="color:#6b7280">Valores positivos = el componente apuntó hacia los números que salieron</span>
+    </div>`;
+  }
+  return `${row('Frecuencia','freq','#3ea6ff')}${row('Sequía','drought','#4ade80')}${row('Coocurrencia','cooc','#ffb53e')}
+  <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Se actualizan con cada carga</div>${perf}`;
+}
+
+function computePredictions(freq,patterns,pairs){
+  if(!freq||!patterns||!pairs) return null;
+  const fv=Object.values(freq.freq_main);
+  const maxF=Math.max(...fv),minF=Math.min(...fv);
+  const dv=Object.values(patterns.gaps_by_num).map(g=>g.current_drought);
+  const maxD=Math.max(...dv)||1;
+  const sm={};
+  for(let i=1;i<=43;i++){
+    const fs=maxF>minF?(freq.freq_main[i]-minF)/(maxF-minF):0.5;
+    const ds=patterns.gaps_by_num[i].current_drought/maxD;
+    let ps=0;
+    freq.top10_main.slice(0,5).forEach(([j])=>{
+      if(j===i)return;const a=Math.min(i,j),b=Math.max(i,j);
+      ps+=(pairs.pair_count[`${a}-${b}`]||0);
+    });
+    ps=Math.min(1,ps/(5*(freq.top10_main[0]?freq.top10_main[0][1]:1)+1));
+    sm[i]=_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps;
+  }
+  const totM=Object.values(sm).reduce((a,b)=>a+b,0)||1;
+  const nm={};for(let i=1;i<=43;i++) nm[i]=sm[i]/totM;
+  const dfv=Object.values(freq.freq_diff);
+  const mxDF=Math.max(...dfv)||1,mnDF=Math.min(...dfv);
+  const sd={};
+  for(let i=1;i<=16;i++){
+    const fn=mxDF>mnDF?(freq.freq_diff[i]-mnDF)/(mxDF-mnDF):0.5;
+    sd[i]=0.55*fn+0.45*(1-fn);
+  }
+  const totD=Object.values(sd).reduce((a,b)=>a+b,0)||1;
+  for(let i=1;i<=16;i++) sd[i]=sd[i]/totD;
+  const rm=Object.entries(nm).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
+  const rd=Object.entries(sd).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
+  const comA=rm.slice(0,5).map(x=>x[0]).sort((a,b)=>a-b);
+  const diffA=rd[0][0];
+  // Balanced combo
+  const hot=rm.slice(0,15).map(x=>x[0]);
+  const cold=rm.slice(-10).map(x=>x[0]);
+  const mid=rm.slice(15,30).map(x=>x[0]);
+  const ps2=new Set(),cb=[];
+  for(const pool of [hot,hot,mid,cold,cold]){
+    const f=pool.filter(x=>!ps2.has(x));
+    if(f.length>0){const p=f[Math.floor(Math.random()*f.length)];ps2.add(p);cb.push(p);}
+  }
+  while(cb.length<5){const c=Math.floor(Math.random()*43)+1;if(!cb.includes(c))cb.push(c);}
+  // Ensemble
+  const eN=rm.map(x=>x[0]),eW=rm.map(x=>x[1]);
+  const dN=rd.map(x=>x[0]),dW=rd.map(x=>x[1]);
+  const ens=[];
+  for(let c=0;c<5;c++){
+    const ns=weightedSample(eN,[...eW],5);
+    const df=weightedSample(dN,[...dW],1)[0];
+    ens.push({nums:ns.sort((a,b)=>a-b),diff:df});
+  }
+  return {scores_main:nm,scores_diff:sd,ranking_main:rm,ranking_diff:rd,
+    combo_deterministic_top5:comA,combo_deterministic_diff:diffA,
+    combo_balanced:cb.slice(0,5).sort((a,b)=>a-b),combos_ensemble:ens};
+}
+
+function computeAll(records){
+  const P=records.filter(r=>r.tipo==='Principal').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const S=records.filter(r=>r.tipo==='Secundario').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const allD=[...new Set(records.map(r=>r.fecha))].sort();
+  const fP=computeFreq(P),fS=computeFreq(S);
+  const ptP=computePatterns(P),ptS=computePatterns(S);
+  const pairP=computePairs(P),pairS=computePairs(S);
+  const predP=computePredictions(fP,ptP,pairP);
+  const predS=computePredictions(fS,ptS,pairS);
+  return {
+    meta:{total_rows:records.length,fecha_min:allD[0]||'',fecha_max:allD[allD.length-1]||'',
+      span_days:allD.length>1?Math.round((new Date(allD[allD.length-1]+'T00:00:00')-new Date(allD[0]+'T00:00:00'))/86400000):0,
+      sorteos_principal:P.length,sorteos_secundario:S.length},
+    sum_series_p:P.map(r=>({fecha:r.fecha,suma:r.n1+r.n2+r.n3+r.n4+r.n5,diff:r.diff})),
+    sum_series_s:S.map(r=>({fecha:r.fecha,suma:r.n1+r.n2+r.n3+r.n4+r.n5,diff:r.diff})),
+    mov_avg_p:movingAvg(P.map(r=>r.n1+r.n2+r.n3+r.n4+r.n5),20),
+    mov_avg_s:movingAvg(S.map(r=>r.n1+r.n2+r.n3+r.n4+r.n5),20),
+    freq:{Principal:fP,Secundario:fS},
+    patterns:{Principal:ptP,Secundario:ptS},
+    pairs:{Principal:pairP,Secundario:pairS},
+    predictions:{Principal:predP,Secundario:predS}
+  };
+}
+
+// ============================================================
+// SUPABASE: LOAD DATA
+// ============================================================
+async function fetchAllRecords(){
+  let all=[], from=0, pageSize=1000;
+  while(true){
+    const {data,error}=await _sb.from('sorteos').select('fecha,tipo,n1,n2,n3,n4,n5,diff').order('fecha',{ascending:true}).range(from,from+pageSize-1);
+    if(error) throw error;
+    all=[...all,...data];
+    if(data.length<pageSize) break;
+    from+=pageSize;
+  }
+  return all;
+}
+
+async function loadAndRender(){
+  if(!_sb){ showStatus('⚠ Configura Supabase primero (sección de configuración arriba).','error'); return; }
+  showStatus('⏳ Cargando datos desde Supabase…','loading');
+  document.getElementById('btnGuardar').disabled=true;
+  document.getElementById('btnReanalizar').disabled=true;
+  try{
+    const records=await fetchAllRecords();
+    if(records.length===0){ showStatus('⚠ No hay registros en Supabase aún. Ingresa el primer sorteo.','error'); return; }
+
+    // ── 1. LOAD STORED PREDICTION (before this load) ──────────────
+    const storedPred=loadStoredPrediction();
+
+    // ── 2. GRADE COMPONENTS & UPDATE WEIGHTS ──────────────────────
+    const P=records.filter(r=>r.tipo==='Principal').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    const S=records.filter(r=>r.tipo==='Secundario').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    const gradesP=gradeComponents(P,20);
+    const gradesS=gradeComponents(S,20);
+    const avgGrades={
+      freq:   (gradesP.freq+gradesS.freq)/2,
+      drought:(gradesP.drought+gradesS.drought)/2,
+      cooc:   (gradesP.cooc+gradesS.cooc)/2,
+      count:  gradesP.count+gradesS.count
+    };
+    _weights=adjustWeights(_weights, avgGrades);
+    try{localStorage.setItem('modelWeights',JSON.stringify(_weights));}catch(e){}
+
+    // ── 3. COMPUTE ALL STATS (uses updated _weights via global) ───
+    showStatus('⚙ Calculando análisis y ajustando pesos del modelo…','loading');
+    const DATA=computeAll(records);
+
+    // ── 4. DETERMINE LATEST DRAW DATE & POST-MORTEM ───────────────
+    const allD=[...new Set(records.map(r=>r.fecha))].sort();
+    const latestDrawDate=allD[allD.length-1]||'';
+    const postMortemHTML=buildPostMortemHTML(storedPred, records);
+    const weightsHTML=buildWeightsHTML(_weights, avgGrades);
+
+    // ── 5. SAVE PREDICTION TO SUPABASE & LOAD HISTORY ────────────
+    await savePredictionToSupabase(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario, _weights);
+    let predHistory = await loadPredictionHistory();
+    if(predHistory.length > 0){
+      await fillPredictionResults(predHistory, records);
+      predHistory = await loadPredictionHistory(); // reload after fills
+    }
+
+    // ── 6. RENDER ─────────────────────────────────────────────────
+    renderAll(DATA, records, {postMortemHTML, weightsHTML, predHistory});
+
+    // ── 7. STORE NEW PREDICTION (localStorage) for next post-mortem
+    storePrediction(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario);
+
+    const wf=(_weights.freq*100).toFixed(0), wd=(_weights.drought*100).toFixed(0), wc=(_weights.cooc*100).toFixed(0);
+    showStatus(`✓ ${records.length} registros · Pesos ajustados: freq=${wf}% sequia=${wd}% cooc=${wc}%`,'ok');
+  }catch(e){
+    showStatus('✗ Error: '+e.message,'error');
+    console.error(e);
+  }finally{
+    document.getElementById('btnGuardar').disabled=false;
+    document.getElementById('btnReanalizar').disabled=false;
+  }
+}
+
+// ============================================================
+// FORM: GUARDAR SORTEO
+// ============================================================
+async function handleFormSubmit(e){
+  e.preventDefault();
+  if(!_sb){ showStatus('⚠ Configura Supabase primero.','error'); return; }
+  const fecha=document.getElementById('fFecha').value;
+  const tipo=document.getElementById('fTipo').value;
+  const n1=+document.getElementById('fN1').value;
+  const n2=+document.getElementById('fN2').value;
+  const n3=+document.getElementById('fN3').value;
+  const n4=+document.getElementById('fN4').value;
+  const n5=+document.getElementById('fN5').value;
+  const diff=+document.getElementById('fDiff').value;
+  // Validations
+  if(!fecha||!tipo){ showStatus('⚠ Fecha y tipo son obligatorios.','error'); return; }
+  const nums=[n1,n2,n3,n4,n5];
+  if(nums.some(x=>x<1||x>43)){ showStatus('⚠ Los 5 números principales deben estar entre 1 y 43.','error'); return; }
+  if(new Set(nums).size!==5){ showStatus('⚠ Los 5 números principales deben ser distintos entre sí.','error'); return; }
+  if(diff<1||diff>16){ showStatus('⚠ El número diferente debe estar entre 1 y 16.','error'); return; }
+  document.getElementById('btnGuardar').disabled=true;
+  showStatus('💾 Guardando en Supabase…','loading');
+  try{
+    const {error}=await _sb.from('sorteos').insert([{fecha,tipo,n1,n2,n3,n4,n5,diff}]);
+    if(error) throw error;
+    document.getElementById('sorteoForm').reset();
+    showStatus('✓ Sorteo guardado. Recalculando análisis…','loading');
+    await loadAndRender();
+  }catch(e){
+    if(e.code==='23505'){ showStatus('⚠ Ya existe un registro para esta fecha y tipo.','error'); }
+    else { showStatus('✗ Error al guardar: '+e.message,'error'); }
+  }finally{
+    document.getElementById('btnGuardar').disabled=false;
+  }
+}
+
+// ============================================================
+// RENDER: UPDATE RECENT RECORDS TABLE
+// ============================================================
+function renderRecentTable(records){
+  const recent=[...records].sort((a,b)=>b.fecha.localeCompare(a.fecha)).slice(0,30);
+  const rows=['<tr><th>Fecha</th><th>Tipo</th><th>N1</th><th>N2</th><th>N3</th><th>N4</th><th>N5</th><th>Diff</th></tr>'];
+  for(const r of recent){
+    rows.push(`<tr><td>${r.fecha}</td><td><span class="${r.tipo==='Principal'?'badge-ok':'badge-neutral'}">${r.tipo}</span></td><td>${r.n1}</td><td>${r.n2}</td><td>${r.n3}</td><td>${r.n4}</td><td>${r.n5}</td><td>${r.diff}</td></tr>`);
+  }
+  document.getElementById('tblRecientes').innerHTML=rows.join('');
+}
+
+// ============================================================
+// RENDER ALL (uses computed DATA object)
+// ============================================================
+function renderAll(DATA, rawRecords, extra){
+  const meta=DATA.meta;
+  document.getElementById('heroMeta').innerHTML=`
+    <span>📅 ${meta.fecha_min} → ${meta.fecha_max}</span>
+    <span>📊 ${meta.total_rows} registros</span>
+    <span>🎲 ${meta.sorteos_principal} sorteos Principal · ${meta.sorteos_secundario} Secundario</span>
+    <span>⏱ ${meta.span_days} días</span>`;
+  document.getElementById('resTotalRows').textContent=meta.total_rows;
+  document.getElementById('resDraws').textContent=meta.sorteos_principal;
+  document.getElementById('resSpan').textContent=meta.span_days;
+
+  const fP=DATA.freq.Principal,fS=DATA.freq.Secundario;
+  // Drought KPIs
+  const droP=DATA.patterns.Principal.gaps_by_num;
+  let maxDrP={n:null,d:0};
+  Object.keys(droP).forEach(k=>{const d=droP[k].current_drought||0;if(d>maxDrP.d)maxDrP={n:k,d:d};});
+  const droS=DATA.patterns.Secundario.gaps_by_num;
+  let maxDrS={n:null,d:0};
+  Object.keys(droS).forEach(k=>{const d=droS[k].current_drought||0;if(d>maxDrS.d)maxDrS={n:k,d:d};});
+  const kpis=[
+    {lbl:'Número ★ más frecuente (Principal)',val:`#${fP.top10_main[0][0]}`,sub:`${fP.top10_main[0][1]} apariciones`},
+    {lbl:'Número ★ más frecuente (Secundario)',val:`#${fS.top10_main[0][0]}`,sub:`${fS.top10_main[0][1]} apariciones`},
+    {lbl:'Suma promedio por sorteo',val:fP.sum_mean.toFixed(1),sub:`σ=${fP.sum_std.toFixed(1)} · teórico ≈110`},
+    {lbl:'P-value Chi² Principal',val:fP.p_main.toFixed(3),sub:fP.p_main>0.05?'✓ Pasa (uniforme)':'✗ Rechaza'},
+    {lbl:'Mayor sequía actual (Principal)',val:`#${maxDrP.n}`,sub:`${maxDrP.d} sorteos sin aparecer`},
+    {lbl:'Mayor sequía actual (Secundario)',val:`#${maxDrS.n}`,sub:`${maxDrS.d} sorteos sin aparecer`},
+  ];
+  document.getElementById('kpis').innerHTML=kpis.map(k=>`<div class="kpi"><div class="lbl">${k.lbl}</div><div class="val">${k.val}</div><div class="sub">${k.sub}</div></div>`).join('');
+
+  // Sidebar nav active
+  const navLinks=document.querySelectorAll('nav.side a');
+  const sections=Array.from(document.querySelectorAll('section'));
+  function updateNav(){
+    const scrollY=window.scrollY+100;
+    let current=sections[0].id;
+    for(const s of sections){if(s.offsetTop<=scrollY)current=s.id;}
+    navLinks.forEach(a=>{a.classList.toggle('active',a.getAttribute('href')==='#'+current);});
+  }
+  window.removeEventListener('scroll',updateNav);
+  window.addEventListener('scroll',updateNav);
+  navLinks.forEach(a=>a.addEventListener('click',e=>{navLinks.forEach(x=>x.classList.remove('active'));a.classList.add('active');}));
+
+  // Tabs
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.onclick=()=>{
+      const target=btn.dataset.tab;
+      const tp=btn.closest('section');
+      tp.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+      tp.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+      btn.classList.add('active');
+      tp.querySelector('#'+target).classList.add('active');
+    };
+  });
+
+  Chart.defaults.color='#9ca3af';
+  Chart.defaults.borderColor='#262b35';
+  Chart.defaults.font.family='-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif';
+
+  // DOW
+  const dowMap={0:'Lun',1:'Mar',2:'Mié',3:'Jue',4:'Vie',5:'Sáb',6:'Dom'};
+  const dowDist=DATA.patterns.Principal.dow_dist;
+  safeChart('chartDow',{type:'bar',data:{labels:Object.keys(dowDist).map(k=>dowMap[k]),datasets:[{label:'Sorteos por día',data:Object.values(dowDist),backgroundColor:'#3ea6ff'}]},options:{maintainAspectRatio:false,plugins:{legend:{display:false},title:{display:true,text:'Distribución de sorteos por día de la semana'}}}});
+
+  // Freq charts
+  function buildFreqChart(id,freqObj,expected,color){
+    const keys=Object.keys(freqObj).sort((a,b)=>+a-+b);
+    const vals=keys.map(k=>freqObj[k]);
+    safeChart(id,{type:'bar',data:{labels:keys,datasets:[{label:'Frecuencia observada',data:vals,backgroundColor:color},{label:'Esperado uniforme',data:keys.map(()=>expected),type:'line',borderColor:'#f87171',borderDash:[5,5],pointRadius:0,backgroundColor:'transparent'}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Frecuencia por número'}}}});
+  }
+  buildFreqChart('chartFreqP',fP.freq_main,fP.exp_main,'#3ea6ff');
+  buildFreqChart('chartFreqS',fS.freq_main,fS.exp_main,'#a78bfa');
+  buildFreqChart('chartDiffP',fP.freq_diff,fP.exp_diff,'#ffb53e');
+  buildFreqChart('chartDiffS',fS.freq_diff,fS.exp_diff,'#4ade80');
+
+  // Top/bottom tables
+  function fillRankTable(id,arr,expVal){
+    const rows=['<tr><th>Rank</th><th>Número</th><th>Frecuencia</th><th>Δ vs esperado</th></tr>'];
+    arr.forEach((x,i)=>{
+      const delta=(x[1]-expVal).toFixed(1);
+      rows.push(`<tr><td>${i+1}</td><td><b>${x[0]}</b></td><td class="num">${x[1]}</td><td class="num">${delta}</td></tr>`);
+    });
+    document.getElementById(id).innerHTML=rows.join('');
+  }
+  fillRankTable('topP',fP.top10_main,fP.exp_main);
+  fillRankTable('botP',fP.bottom10_main,fP.exp_main);
+  fillRankTable('topS',fS.top10_main,fS.exp_main);
+  fillRankTable('botS',fS.bottom10_main,fS.exp_main);
+
+  // Decenas
+  const dP=fP.decades,dS=fS.decades;
+  const dK=['D1(1-10)','D2(11-20)','D3(21-30)','D4(31-40)','D5(41-43)'];
+  safeChart('chartDecenas',{type:'bar',data:{labels:dK,datasets:[{label:'Principal',data:dK.map(k=>dP[k]||0),backgroundColor:'#3ea6ff'},{label:'Secundario',data:dK.map(k=>dS[k]||0),backgroundColor:'#a78bfa'}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Apariciones por decena (ambos universos)'}}}});
+
+  // Struct table
+  document.getElementById('tblStruct').innerHTML=`<tr><th>Métrica</th><th>Principal</th><th>Secundario</th><th>Esperado teórico</th></tr><tr><td>Suma media</td><td>${fP.sum_mean.toFixed(2)}</td><td>${fS.sum_mean.toFixed(2)}</td><td>110.0</td></tr><tr><td>Suma σ</td><td>${fP.sum_std.toFixed(2)}</td><td>${fS.sum_std.toFixed(2)}</td><td>~28</td></tr><tr><td>Pares por sorteo</td><td>${fP.even_mean.toFixed(2)}</td><td>${fS.even_mean.toFixed(2)}</td><td>2.44</td></tr><tr><td>Altos (≥22) por sorteo</td><td>${fP.high_mean.toFixed(2)}</td><td>${fS.high_mean.toFixed(2)}</td><td>2.56</td></tr><tr><td>Suma mínima</td><td>${fP.sum_min}</td><td>${fS.sum_min}</td><td>15 (teórico)</td></tr><tr><td>Suma máxima</td><td>${fP.sum_max}</td><td>${fS.sum_max}</td><td>205 (teórico)</td></tr>`;
+
+  // Chi table
+  document.getElementById('tblChi').innerHTML=`<tr><th>Test</th><th>χ²</th><th>gl</th><th>p-value</th><th>Decisión α=0.05</th></tr><tr><td>Principales · Principal</td><td>${fP.chi_main.toFixed(2)}</td><td>42</td><td>${fP.p_main.toFixed(4)}</td><td>${fP.p_main>0.05?'<span class="badge-ok">✓ Uniforme</span>':'<span class="badge-bad">✗ Sesgo</span>'}</td></tr><tr><td>Diferente · Principal</td><td>${fP.chi_diff.toFixed(2)}</td><td>15</td><td>${fP.p_diff.toFixed(4)}</td><td>${fP.p_diff>0.05?'<span class="badge-ok">✓ Uniforme</span>':'<span class="badge-bad">✗ Sesgo</span>'}</td></tr><tr><td>Principales · Secundario</td><td>${fS.chi_main.toFixed(2)}</td><td>42</td><td>${fS.p_main.toFixed(4)}</td><td>${fS.p_main>0.05?'<span class="badge-ok">✓ Uniforme</span>':'<span class="badge-bad">✗ Sesgo</span>'}</td></tr><tr><td>Diferente · Secundario</td><td>${fS.chi_diff.toFixed(2)}</td><td>15</td><td>${fS.p_diff.toFixed(4)}</td><td>${fS.p_diff>0.05?'<span class="badge-ok">✓ Uniforme</span>':'<span class="badge-bad">✗ Sesgo</span>'}</td></tr>`;
+
+  // Time series
+  function buildTsChart(id,series,mvavg,color){
+    const labels=series.map(x=>x.fecha);
+    const vals=series.map(x=>x.suma);
+    safeChart(id,{type:'line',data:{labels,datasets:[{label:'Suma por sorteo',data:vals,borderColor:color,borderWidth:0.9,pointRadius:0,backgroundColor:color+'22'},{label:'Media móvil 20',data:mvavg,borderColor:'#ffb53e',borderWidth:2,pointRadius:0,backgroundColor:'transparent'},{label:'Media teórica (110)',data:labels.map(()=>110),borderColor:'#f87171',borderDash:[5,5],pointRadius:0,borderWidth:1}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Suma de los 5 principales por sorteo'}},scales:{x:{ticks:{maxTicksLimit:10}}}}});
+  }
+  buildTsChart('chartTsP',DATA.sum_series_p,DATA.mov_avg_p,'#3ea6ff');
+  buildTsChart('chartTsS',DATA.sum_series_s,DATA.mov_avg_s,'#a78bfa');
+
+  // Runs test
+  const rP=DATA.patterns.Principal.runs_test,rS=DATA.patterns.Secundario.runs_test;
+  document.getElementById('tblRuns').innerHTML=`<tr><th>Universo</th><th>Runs observados</th><th>Runs esperados</th><th>Z-score</th><th>p-value</th><th>Conclusión</th></tr><tr><td>Principal</td><td>${rP.runs}</td><td>${rP.expected.toFixed(1)}</td><td>${rP.z.toFixed(3)}</td><td>${rP.p_value.toFixed(4)}</td><td>${rP.p_value>0.05?'<span class="badge-ok">✓ Aleatorio</span>':'<span class="badge-bad">✗ No aleatorio</span>'}</td></tr><tr><td>Secundario</td><td>${rS.runs}</td><td>${rS.expected.toFixed(1)}</td><td>${rS.z.toFixed(3)}</td><td>${rS.p_value.toFixed(4)}</td><td>${rS.p_value>0.05?'<span class="badge-ok">✓ Aleatorio</span>':'<span class="badge-bad">✗ No aleatorio</span>'}</td></tr>`;
+
+  // ACF
+  const acfP=DATA.patterns.Principal.acf,acfS=DATA.patterns.Secundario.acf;
+  const lags=Object.keys(acfP).sort((a,b)=>+a-+b);
+  safeChart('chartAcf',{type:'bar',data:{labels:lags.map(l=>`lag ${l}`),datasets:[{label:'Principal',data:lags.map(l=>acfP[l]),backgroundColor:'#3ea6ff'},{label:'Secundario',data:lags.map(l=>acfS[l]),backgroundColor:'#a78bfa'}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Autocorrelación de la suma — cerca de 0 = sin memoria'}},scales:{y:{suggestedMin:-0.2,suggestedMax:0.2}}}});
+
+  // Sum by DOW
+  const sbdP=DATA.patterns.Principal.sum_by_dow,sbdS=DATA.patterns.Secundario.sum_by_dow;
+  const dowKeys=Object.keys(sbdP).sort();
+  safeChart('chartSumByDow',{type:'bar',data:{labels:dowKeys.map(k=>dowMap[k]),datasets:[{label:'Principal',data:dowKeys.map(k=>sbdP[k]),backgroundColor:'#3ea6ff'},{label:'Secundario',data:dowKeys.map(k=>sbdS[k]),backgroundColor:'#a78bfa'}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Suma media por día de la semana (esperado ≈110)'}}}});
+
+  // Droughts tables
+  function buildDroughtTable(id,gapsObj){
+    const arr=Object.keys(gapsObj).map(k=>{const g=gapsObj[k];return{n:+k,drought:g.current_drought||0,mean:g.gap_mean||0,max:g.gap_max||0,apar:g.n_apar||0};}).sort((a,b)=>b.drought-a.drought).slice(0,15);
+    const rows=['<tr><th>Número</th><th>Sequía actual</th><th>Gap medio</th><th>Gap máx histórico</th><th>Apariciones totales</th></tr>'];
+    arr.forEach(x=>{
+      const sev=x.drought>20?'color:#f87171;font-weight:700':(x.drought>10?'color:#ffb53e;font-weight:600':'');
+      rows.push(`<tr><td><b>${x.n}</b></td><td style="${sev}">${x.drought}</td><td class="num">${x.mean.toFixed(1)}</td><td class="num">${x.max}</td><td class="num">${x.apar}</td></tr>`);
+    });
+    document.getElementById(id).innerHTML=rows.join('');
+  }
+  buildDroughtTable('tblDroughtP',DATA.patterns.Principal.gaps_by_num);
+  buildDroughtTable('tblDroughtS',DATA.patterns.Secundario.gaps_by_num);
+
+  // Gaps chart
+  const gpP=DATA.patterns.Principal.gaps_by_num;
+  const gpKeys=Object.keys(gpP).sort((a,b)=>+a-+b);
+  safeChart('chartGaps',{type:'bar',data:{labels:gpKeys,datasets:[{label:'Gap medio — Principal',data:gpKeys.map(k=>gpP[k].gap_mean||0),backgroundColor:'#3ea6ff'},{label:'Gap medio — Secundario',data:gpKeys.map(k=>(DATA.patterns.Secundario.gaps_by_num[k]||{}).gap_mean||0),backgroundColor:'#a78bfa'},{label:'Esperado (8.6)',data:gpKeys.map(()=>8.6),type:'line',borderColor:'#f87171',borderDash:[5,5],pointRadius:0,backgroundColor:'transparent'}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Gap medio entre apariciones por número'}}}});
+
+  // Pairs/triples tables
+  function buildPairsTable(id,arr,exp){
+    const rows=['<tr><th>Par</th><th>Coocurrencia</th><th>Δ vs esperado</th></tr>'];
+    arr.forEach(x=>{const pair=x[0];rows.push(`<tr><td><b>${pair[0]} · ${pair[1]}</b></td><td class="num">${x[1]}</td><td class="num">+${(x[1]-exp).toFixed(1)}</td></tr>`);});
+    document.getElementById(id).innerHTML=rows.join('');
+  }
+  buildPairsTable('tblPairsP',DATA.pairs.Principal.top_pairs.slice(0,15),DATA.pairs.Principal.exp_pair);
+  buildPairsTable('tblPairsS',DATA.pairs.Secundario.top_pairs.slice(0,15),DATA.pairs.Secundario.exp_pair);
+
+  function buildTripTable(id,arr){
+    const rows=['<tr><th>Tripleta</th><th>Coocurrencia</th></tr>'];
+    arr.forEach(x=>{const t=x[0];rows.push(`<tr><td><b>${t[0]} · ${t[1]} · ${t[2]}</b></td><td class="num">${x[1]}</td></tr>`);});
+    document.getElementById(id).innerHTML=rows.join('');
+  }
+  buildTripTable('tblTripP',DATA.pairs.Principal.top_triples.slice(0,10));
+  buildTripTable('tblTripS',DATA.pairs.Secundario.top_triples.slice(0,10));
+
+  document.getElementById('tblCorr').innerHTML=`<tr><th>Universo</th><th>Corr(diff, media 5 principales)</th><th>Corr(diff, suma 5 principales)</th><th>Interpretación</th></tr><tr><td>Principal</td><td>${DATA.pairs.Principal.corr_diff_avg.toFixed(3)}</td><td>${DATA.pairs.Principal.corr_diff_sum.toFixed(3)}</td><td>Independientes</td></tr><tr><td>Secundario</td><td>${DATA.pairs.Secundario.corr_diff_avg.toFixed(3)}</td><td>${DATA.pairs.Secundario.corr_diff_sum.toFixed(3)}</td><td>Independientes</td></tr>`;
+  document.getElementById('repeatedCombos').innerHTML=`En ${DATA.meta.sorteos_principal} sorteos Principal: <b>${DATA.pairs.Principal.repeated_full}</b> combinaciones completas (5 + diff) repetidas. En Secundario: <b>${DATA.pairs.Secundario.repeated_full}</b>. Bajo uniformidad el esperado es prácticamente 0 — consistente con generador aleatorio.`;
+
+  // Hot/cold
+  function renderChips(id,arr,cls){document.getElementById(id).innerHTML=arr.map(x=>`<span class="chip ${cls}">#${x[0]} <small>(${x[1]})</small></span>`).join(' ');}
+  renderChips('hotP',DATA.patterns.Principal.recent_hot.slice(0,10),'hot');
+  renderChips('coldP',DATA.patterns.Principal.recent_cold.slice(0,10),'cold');
+  renderChips('hotS',DATA.patterns.Secundario.recent_hot.slice(0,10),'hot');
+  renderChips('coldS',DATA.patterns.Secundario.recent_cold.slice(0,10),'cold');
+
+  // Predictive charts
+  function buildPredChart(cid,scoresObj,color){
+    const keys=Object.keys(scoresObj).sort((a,b)=>+a-+b);
+    const vals=keys.map(k=>scoresObj[k]*100);
+    const unif=100/keys.length;
+    safeChart(cid,{type:'bar',data:{labels:keys,datasets:[{label:'Probabilidad ajustada (%)',data:vals,backgroundColor:color},{label:`Prior uniforme (${unif.toFixed(2)}%)`,data:keys.map(()=>unif),type:'line',borderColor:'#f87171',borderDash:[5,5],pointRadius:0}]},options:{maintainAspectRatio:false,plugins:{title:{display:true,text:'Probabilidad ajustada por número'}},scales:{y:{title:{display:true,text:'Probabilidad %'}}}}});
+  }
+  buildPredChart('chartPredP',DATA.predictions.Principal.scores_main,'#4ade80');
+  buildPredChart('chartPredS',DATA.predictions.Secundario.scores_main,'#4ade80');
+  buildPredChart('chartPredDiffP',DATA.predictions.Principal.scores_diff,'#ffb53e');
+  buildPredChart('chartPredDiffS',DATA.predictions.Secundario.scores_diff,'#ffb53e');
+
+  function buildPredTable(id,ranking){
+    const rows=['<tr><th>Rank</th><th>Número</th><th>Probabilidad %</th><th>Δ vs uniforme (2.33%)</th></tr>'];
+    ranking.slice(0,15).forEach((x,i)=>{
+      const pct=x[1]*100, delta=pct-(100/43);
+      const cls=delta>0?'color:#86efac':'color:#f87171';
+      rows.push(`<tr><td>${i+1}</td><td><b>${x[0]}</b></td><td class="num">${pct.toFixed(3)}%</td><td class="num" style="${cls}">${(delta>=0?'+':'')+delta.toFixed(2)}%</td></tr>`);
+    });
+    document.getElementById(id).innerHTML=rows.join('');
+  }
+  buildPredTable('tblPredP',DATA.predictions.Principal.ranking_main);
+  buildPredTable('tblPredS',DATA.predictions.Secundario.ranking_main);
+
+  // Combos
+  function buildCombos(id,tipo){
+    const p=DATA.predictions[tipo]; let html='';
+    html+=`<div class="combo-box"><span class="lbl">A · Determinístico</span>`;
+    p.combo_deterministic_top5.forEach(n=>html+=`<span class="ball">${n}</span>`);
+    html+=`<span style="margin:0 8px;color:#86efac">+</span><span class="ball diff">${p.combo_deterministic_diff}</span></div>`;
+    html+=`<div class="combo-box"><span class="lbl">B · Balanceado</span>`;
+    p.combo_balanced.forEach(n=>html+=`<span class="ball">${n}</span>`);
+    html+=`<span style="margin:0 8px;color:#86efac">+</span><span class="ball diff">${p.ranking_diff[0][0]}</span></div>`;
+    p.combos_ensemble.forEach((c,i)=>{
+      html+=`<div class="combo-box"><span class="lbl">C${i+1} · Ensemble</span>`;
+      c.nums.forEach(n=>html+=`<span class="ball">${n}</span>`);
+      html+=`<span style="margin:0 8px;color:#86efac">+</span><span class="ball diff">${c.diff}</span></div>`;
+    });
+    document.getElementById(id).innerHTML=html;
+  }
+  buildCombos('combosP','Principal');
+  buildCombos('combosS','Secundario');
+
+  // ─── PREDICCIÓN HERO (top of page) ───────────────────────────
+  const predP = DATA.predictions.Principal;
+  const predS = DATA.predictions.Secundario;
+  function heroBalls(nums, diffNum, ballClass, diffClass){
+    return nums.map(n=>`<span class="ball-lg ${ballClass}">${n}</span>`).join('')
+      + `<span class="pred-sep">+</span>`
+      + `<span class="ball-lg ${diffClass}" title="Número diferente">${diffNum}</span>`;
+  }
+  function buildPredCard(tipo, pred, cardClass, ballClass, diffClass){
+    const nums = pred.combo_deterministic_top5;
+    const diff = pred.combo_deterministic_diff;
+    const top3 = pred.ranking_main.slice(0,3).map(x=>x[0]).join(', ');
+    return `<div class="pred-card ${cardClass}">
+      <div class="pred-card-title">&#127919; ${tipo}</div>
+      <div class="pred-card-sub">Top 3 candidatos: <b>${top3}</b> &nbsp;·&nbsp; Estrategia determinística (máxima probabilidad)</div>
+      <div class="pred-balls">${heroBalls(nums, diff, ballClass, diffClass)}</div>
+      <div style="margin-top:14px;">
+        <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Combo balanceado (calientes + fríos)</div>
+        <div class="pred-balls">${heroBalls(pred.combo_balanced, pred.ranking_diff[0][0], ballClass, diffClass)}</div>
+      </div>
+    </div>`;
+  }
+  document.getElementById('predHeroContent').innerHTML =
+    `<div class="pred-hero-grid">
+      ${buildPredCard('Principal', predP, '', '', 'diff')}
+      ${buildPredCard('Secundario', predS, 'sec', 'sec', 'diff-sec')}
+    </div>
+    <div class="note" style="margin-top:8px;font-size:12.5px;">
+      <b>Metodología:</b> Los números azules son los 5 principales sugeridos (ordenados). El círculo naranja/rosa es el número diferente (1-16) sugerido.
+      Las bolas verdes/violetas = combo determinístico (top probabilidad). Las bolas balanceadas mezclan calientes y fríos para mayor cobertura.
+      <b>Recordatorio:</b> Este es un modelo estadístico descriptivo — ningún sistema puede predecir un generador verdaderamente aleatorio.
+    </div>`;
+
+  // ── LEARNING PANEL ──────────────────────────────────────────
+  if(extra){
+    const lp=document.getElementById('learningPanel');
+    if(lp) lp.style.display='grid';
+    if(extra.weightsHTML) document.getElementById('weightsDisplay').innerHTML=extra.weightsHTML;
+    if(extra.postMortemHTML) document.getElementById('postMortemDisplay').innerHTML=extra.postMortemHTML;
+  }
+
+  // ── PREDICTION HISTORY ────────────────────────────────────────
+  if(extra&&extra.predHistory!==undefined){
+    const hP=extra.predHistory.filter(p=>p.tipo==='Principal');
+    const hS=extra.predHistory.filter(p=>p.tipo==='Secundario');
+    const tP=document.getElementById('tblHistP');
+    const tS=document.getElementById('tblHistS');
+    if(tP) tP.innerHTML=renderPredictionHistory(hP);
+    if(tS) tS.innerHTML=renderPredictionHistory(hS);
+  }
+
+  // Recent records table
+  if(rawRecords) renderRecentTable(rawRecords);
+}
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener('DOMContentLoaded',()=>{
+  // Prefill config fields from localStorage
+  document.getElementById('cfgUrl').value=_sbUrl;
+  document.getElementById('cfgKey').value=_sbKey;
+  document.getElementById('btnReanalizar').addEventListener('click',loadAndRender);
+  document.getElementById('sorteoForm').addEventListener('submit',handleFormSubmit);
+  // Init Supabase if credentials already saved
+  if(_sbUrl && _sbKey){
+    if(initSupabase(_sbUrl,_sbKey)){
+      loadAndRender();
+    } else {
+      showStatus('⚠ Credenciales guardadas pero inválidas. Revisa la configuración arriba.','error');
+    }
+  } else {
+    showStatus('👆 Configura tu URL y Anon Key de Supabase arriba para comenzar.','loading');
+  }
+});
+
+</script>
+</main>
+</body>
+</html>
