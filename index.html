@@ -1127,23 +1127,27 @@ function buildWeightsHTML(weights, grades){
   <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Se actualizan con cada carga</div>${perf}`;
 }
 
-function computePredictions(freq,patterns,pairs){
+function computePredictions(freq,patterns,pairs,penaltyNums=new Set()){
   if(!freq||!patterns||!pairs) return null;
   const fv=Object.values(freq.freq_main);
   const maxF=Math.max(...fv),minF=Math.min(...fv);
-  const dv=Object.values(patterns.gaps_by_num).map(g=>g.current_drought);
-  const maxD=Math.max(...dv)||1;
+  // Cap drought at 2.5× expected gap (43 numbers, 5 drawn → expected gap ≈ 8.6 sorteos)
+  // This prevents numbers that keep missing from dominating the model indefinitely
+  const droughtCap=(43/5)*2.5; // ≈21.5 sorteos
   const sm={};
   for(let i=1;i<=43;i++){
     const fs=maxF>minF?(freq.freq_main[i]-minF)/(maxF-minF):0.5;
-    const ds=patterns.gaps_by_num[i].current_drought/maxD;
+    const rawDrought=patterns.gaps_by_num[i].current_drought;
+    const ds=Math.min(rawDrought,droughtCap)/droughtCap;
     let ps=0;
     freq.top10_main.slice(0,5).forEach(([j])=>{
       if(j===i)return;const a=Math.min(i,j),b=Math.max(i,j);
       ps+=(pairs.pair_count[`${a}-${b}`]||0);
     });
     ps=Math.min(1,ps/(5*(freq.top10_main[0]?freq.top10_main[0][1]:1)+1));
-    sm[i]=_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps;
+    // Apply 20% penalty to numbers predicted last time but not drawn (to encourage rotation)
+    const penalty=penaltyNums.has(i)?0.80:1.0;
+    sm[i]=(_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps)*penalty;
   }
   const totM=Object.values(sm).reduce((a,b)=>a+b,0)||1;
   const nm={};for(let i=1;i<=43;i++) nm[i]=sm[i]/totM;
@@ -1160,10 +1164,11 @@ function computePredictions(freq,patterns,pairs){
   const rd=Object.entries(sd).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
   const comA=rm.slice(0,5).map(x=>x[0]).sort((a,b)=>a-b);
   const diffA=rd[0][0];
-  // Balanced combo
-  const hot=rm.slice(0,15).map(x=>x[0]);
-  const cold=rm.slice(-10).map(x=>x[0]);
-  const mid=rm.slice(15,30).map(x=>x[0]);
+  // Balanced combo — exclude deterministic numbers to guarantee genuine diversity
+  const comASet=new Set(comA);
+  const hot=rm.slice(0,20).filter(x=>!comASet.has(x[0])).map(x=>x[0]);
+  const cold=rm.slice(-15).filter(x=>!comASet.has(x[0])).map(x=>x[0]);
+  const mid=rm.slice(15,32).filter(x=>!comASet.has(x[0])).map(x=>x[0]);
   const ps2=new Set(),cb=[];
   for(const pool of [hot,hot,mid,cold,cold]){
     const f=pool.filter(x=>!ps2.has(x));
@@ -1191,8 +1196,27 @@ function computeAll(records){
   const fP=computeFreq(P),fS=computeFreq(S);
   const ptP=computePatterns(P),ptS=computePatterns(S);
   const pairP=computePairs(P),pairS=computePairs(S);
-  const predP=computePredictions(fP,ptP,pairP);
-  const predS=computePredictions(fS,ptS,pairS);
+  // Build penalty sets from last stored prediction for each tipo
+  // Numbers predicted before that did NOT appear get a 20% score discount
+  const penaltyP=new Set(), penaltyS=new Set();
+  try{
+    const sp=loadStoredPrediction();
+    if(sp&&sp.latestDrawDate){
+      const newDrawsP=P.filter(r=>r.fecha>sp.latestDrawDate);
+      const newDrawsS=S.filter(r=>r.fecha>sp.latestDrawDate);
+      // If there are new draws that match the prediction period, mark misses as penalized
+      if(newDrawsP.length>0&&sp.Principal){
+        const actualP=new Set([newDrawsP[0].n1,newDrawsP[0].n2,newDrawsP[0].n3,newDrawsP[0].n4,newDrawsP[0].n5]);
+        sp.Principal.nums.forEach(n=>{if(!actualP.has(n))penaltyP.add(n);});
+      }
+      if(newDrawsS.length>0&&sp.Secundario){
+        const actualS=new Set([newDrawsS[0].n1,newDrawsS[0].n2,newDrawsS[0].n3,newDrawsS[0].n4,newDrawsS[0].n5]);
+        sp.Secundario.nums.forEach(n=>{if(!actualS.has(n))penaltyS.add(n);});
+      }
+    }
+  }catch(e){}
+  const predP=computePredictions(fP,ptP,pairP,penaltyP);
+  const predS=computePredictions(fS,ptS,pairS,penaltyS);
   return {
     meta:{total_rows:records.length,fecha_min:allD[0]||'',fecha_max:allD[allD.length-1]||'',
       span_days:allD.length>1?Math.round((new Date(allD[allD.length-1]+'T00:00:00')-new Date(allD[0]+'T00:00:00'))/86400000):0,
@@ -1231,6 +1255,7 @@ async function loadAndRender(){
   try{
     const records=await fetchAllRecords();
     if(records.length===0){ showStatus('⚠ No hay registros en Supabase aún. Ingresa el primer sorteo.','error'); return; }
+    window._lastRecords=records; // expose for penalty display in renderAll
 
     // ── 1. LOAD STORED PREDICTION (before this load) ──────────────
     const storedPred=loadStoredPrediction();
@@ -1553,14 +1578,31 @@ function renderAll(DATA, rawRecords, extra){
       + `<span class="pred-sep">+</span>`
       + `<span class="ball-lg ${diffClass}" title="Número diferente">${diffNum}</span>`;
   }
+  // Detect which numbers were penalized (predicted before but missed)
+  function getPenalizedNums(tipo){
+    try{
+      const sp=loadStoredPrediction();
+      if(!sp||!sp.latestDrawDate||!sp[tipo]) return [];
+      const allRecs=window._lastRecords||[];
+      const newDraws=allRecs.filter(r=>r.tipo===tipo&&r.fecha>sp.latestDrawDate);
+      if(newDraws.length===0) return [];
+      const actual=new Set([newDraws[0].n1,newDraws[0].n2,newDraws[0].n3,newDraws[0].n4,newDraws[0].n5]);
+      return sp[tipo].nums.filter(n=>!actual.has(n));
+    }catch(e){return [];}
+  }
   function buildPredCard(tipo, pred, cardClass, ballClass, diffClass){
     const nums = pred.combo_deterministic_top5;
     const diff = pred.combo_deterministic_diff;
     const top3 = pred.ranking_main.slice(0,3).map(x=>x[0]).join(', ');
+    const penalized = getPenalizedNums(tipo);
+    const penNote = penalized.length>0
+      ? `<div style="margin-top:8px;font-size:11px;color:#fbbf24">&#9888; Rotación activa: ${penalized.map(n=>`#${n}`).join(', ')} fallaron antes → se redujeron en 20% para diversificar</div>`
+      : '';
     return `<div class="pred-card ${cardClass}">
       <div class="pred-card-title">&#127919; ${tipo}</div>
       <div class="pred-card-sub">Top 3 candidatos: <b>${top3}</b> &nbsp;·&nbsp; Estrategia determinística (máxima probabilidad)</div>
       <div class="pred-balls">${heroBalls(nums, diff, ballClass, diffClass)}</div>
+      ${penNote}
       <div style="margin-top:14px;">
         <div style="font-size:11.5px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Combo balanceado (calientes + fríos)</div>
         <div class="pred-balls">${heroBalls(pred.combo_balanced, pred.ranking_diff[0][0], ballClass, diffClass)}</div>
@@ -1575,6 +1617,7 @@ function renderAll(DATA, rawRecords, extra){
     <div class="note" style="margin-top:8px;font-size:12.5px;">
       <b>Metodología:</b> Los números azules son los 5 principales sugeridos (ordenados). El círculo naranja/rosa es el número diferente (1-16) sugerido.
       Las bolas verdes/violetas = combo determinístico (top probabilidad). Las bolas balanceadas mezclan calientes y fríos para mayor cobertura.
+      La sequía se limita a ≤21 sorteos para evitar que números con racha larga dominen indefinidamente.
       <b>Recordatorio:</b> Este es un modelo estadístico descriptivo — ningún sistema puede predecir un generador verdaderamente aleatorio.
     </div>`;
 
