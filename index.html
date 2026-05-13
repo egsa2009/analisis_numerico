@@ -272,6 +272,10 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;align-items:center;">
     <button type="submit" id="btnGuardar" class="btn-primary">&#128190; Guardar Sorteo</button>
     <button type="button" id="btnReanalizar" class="btn-primary" style="background:var(--accent2);color:#0b0d12">&#128260; Re-Analizar (recargar BD)</button>
+    <button type="button" id="btnForzarPrediccion" class="btn-primary" style="background:#7c3aed;color:#fff;border:1.5px solid #a78bfa;" title="Limpia la memoria del modelo y recalcula la prediccion desde cero con todos los datos actuales">&#9889; Forzar Nueva Prediccion</button>
+  </div>
+  <div id="forzarNote" style="display:none;margin-top:8px;font-size:12px;color:#a78bfa;">
+    &#9889; Modo forzado: se borrara la prediccion guardada y los pesos se recalcularan desde cero con todos los datos actuales.
   </div>
 </form>
 
@@ -550,6 +554,18 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
 <div class="note" style="font-size:12.5px;">
   <b>&#9888; Requisito:</b> Esta sección requiere la tabla <code>predicciones</code> en Supabase.
   Si ves un error o tabla vacía, ejecuta el archivo <b>predicciones_schema.sql</b> en el SQL Editor de Supabase.
+</div>
+<div class="note" style="font-size:12.5px;margin-top:8px;">
+  <b>&#128309; Pesos persistentes (opcional):</b> Para sincronizar pesos entre dispositivos, crea la tabla <code>modelo_pesos</code>:
+  <pre style="margin-top:8px;background:#1a2030;padding:10px;border-radius:6px;font-size:11px;overflow-x:auto;color:#bfd3ff">CREATE TABLE IF NOT EXISTS modelo_pesos (
+  id integer PRIMARY KEY DEFAULT 1,
+  w_freq numeric NOT NULL DEFAULT 0.35,
+  w_sequia numeric NOT NULL DEFAULT 0.40,
+  w_cooc numeric NOT NULL DEFAULT 0.25,
+  g_freq numeric, g_sequia numeric, g_cooc numeric,
+  actualizado_en timestamptz DEFAULT now(),
+  CONSTRAINT single_row CHECK (id = 1)
+);</pre>
 </div>
 
 <div class="tabs" style="margin-top:16px">
@@ -849,7 +865,8 @@ async function savePredictionToSupabase(ultimoSorteo, predP, predS, weights){
       w_freq:+weights.freq.toFixed(4), w_sequia:+weights.drought.toFixed(4), w_cooc:+weights.cooc.toFixed(4)
     };
     try{
-      await _sb.from('predicciones').upsert(row, {onConflict:'tipo,ultimo_sorteo', ignoreDuplicates:true});
+      // FIX: sin ignoreDuplicates → siempre actualiza con los pesos mas recientes
+      await _sb.from('predicciones').upsert(row, {onConflict:'tipo,ultimo_sorteo'});
     }catch(e){ console.warn('savePrediction error:',e.message); }
   }
 }
@@ -869,9 +886,9 @@ async function fillPredictionResults(predHistory, sorteoRecords){
   for(const pred of unresolved){
     // Solo llenar si el sorteo real ocurrió DESPUÉS de que se generó la predicción
     // Esto evita vincular resultados que ya existían cuando se guardó la predicción
-    const predGeneradaEn = pred.generada_en; // 'YYYY-MM-DD' when prediction was saved
+    // FIX: solo filtrar por fecha posterior a ultimo_sorteo
     const nextActual = sorteoRecords
-      .filter(r=>r.tipo===pred.tipo && r.fecha>pred.ultimo_sorteo && r.fecha>=predGeneradaEn)
+      .filter(r=>r.tipo===pred.tipo && r.fecha>pred.ultimo_sorteo)
       .sort((a,b)=>a.fecha.localeCompare(b.fecha))[0];
     if(!nextActual) continue;
     const det=[pred.d1,pred.d2,pred.d3,pred.d4,pred.d5];
@@ -1033,7 +1050,8 @@ function storePrediction(latestDrawDate, predP, predS){
     storedAt: new Date().toISOString(),
     latestDrawDate,
     Principal:{nums:[...predP.combo_deterministic_top5], diff:predP.combo_deterministic_diff},
-    Secundario:{nums:[...predS.combo_deterministic_top5], diff:predS.combo_deterministic_diff}
+    Secundario:{nums:[...predS.combo_deterministic_top5], diff:predS.combo_deterministic_diff},
+    weights:{freq:_weights.freq, drought:_weights.drought, cooc:_weights.cooc}
   };
   try{localStorage.setItem('lastPrediction', JSON.stringify(stored));}catch(e){}
   return stored;
@@ -1127,7 +1145,7 @@ function buildWeightsHTML(weights, grades){
   <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Se actualizan con cada carga</div>${perf}`;
 }
 
-function computePredictions(freq,patterns,pairs,penaltyNums=new Set()){
+function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
   if(!freq||!patterns||!pairs) return null;
   const fv=Object.values(freq.freq_main);
   const maxF=Math.max(...fv),minF=Math.min(...fv);
@@ -1153,10 +1171,28 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set()){
   const nm={};for(let i=1;i<=43;i++) nm[i]=sm[i]/totM;
   const dfv=Object.values(freq.freq_diff);
   const mxDF=Math.max(...dfv)||1,mnDF=Math.min(...dfv);
+  // FIX: calcular sequía del diferente (igual que para los principales)
+  const droughtDiff={};
+  for(let i=1;i<=16;i++) droughtDiff[i]=0;
+  for(let d=draws.length-1;d>=0;d--){
+    const dv=draws[d].diff;
+    if(droughtDiff[dv]===0) droughtDiff[dv]=draws.length-d;
+  }
+  for(let i=1;i<=16;i++) if(droughtDiff[i]===0) droughtDiff[i]=draws.length;
+  const droughtCapD=(16/1)*2.5; // cap para diff: ~40
+  const mxDro=Math.max(...Object.values(droughtDiff));
   const sd={};
   for(let i=1;i<=16;i++){
+    // Score frecuencia normalizado [0,1]
     const fn=mxDF>mnDF?(freq.freq_diff[i]-mnDF)/(mxDF-mnDF):0.5;
-    sd[i]=0.55*fn+0.45*(1-fn);
+    // Score sequía normalizado [0,1] con cap
+    const rawDro=droughtDiff[i];
+    const ds=Math.min(rawDro,droughtCapD)/droughtCapD;
+    // Combinado: 60% frecuencia + 40% sequía (igual que modelo principal)
+    const base=0.60*fn+0.40*ds;
+    // Penalizar diff si falló en la última predicción guardada
+    const diffPenalty=penaltyNums.has(-i)?0.75:1.0; // usar índice negativo para diferenciar
+    sd[i]=base*diffPenalty;
   }
   const totD=Object.values(sd).reduce((a,b)=>a+b,0)||1;
   for(let i=1;i<=16;i++) sd[i]=sd[i]/totD;
@@ -1208,15 +1244,20 @@ function computeAll(records){
       if(newDrawsP.length>0&&sp.Principal){
         const actualP=new Set([newDrawsP[0].n1,newDrawsP[0].n2,newDrawsP[0].n3,newDrawsP[0].n4,newDrawsP[0].n5]);
         sp.Principal.nums.forEach(n=>{if(!actualP.has(n))penaltyP.add(n);});
+        // Penalizar diff si también falló (índice negativo para distinguirlo de principales)
+        if(sp.Principal.diff!==undefined && sp.Principal.diff!==newDrawsP[0].diff)
+          penaltyP.add(-sp.Principal.diff);
       }
       if(newDrawsS.length>0&&sp.Secundario){
         const actualS=new Set([newDrawsS[0].n1,newDrawsS[0].n2,newDrawsS[0].n3,newDrawsS[0].n4,newDrawsS[0].n5]);
         sp.Secundario.nums.forEach(n=>{if(!actualS.has(n))penaltyS.add(n);});
+        if(sp.Secundario.diff!==undefined && sp.Secundario.diff!==newDrawsS[0].diff)
+          penaltyS.add(-sp.Secundario.diff);
       }
     }
   }catch(e){}
-  const predP=computePredictions(fP,ptP,pairP,penaltyP);
-  const predS=computePredictions(fS,ptS,pairS,penaltyS);
+  const predP=computePredictions(fP,ptP,pairP,penaltyP,P);
+  const predS=computePredictions(fS,ptS,pairS,penaltyS,S);
   return {
     meta:{total_rows:records.length,fecha_min:allD[0]||'',fecha_max:allD[allD.length-1]||'',
       span_days:allD.length>1?Math.round((new Date(allD[allD.length-1]+'T00:00:00')-new Date(allD[0]+'T00:00:00'))/86400000):0,
@@ -1247,6 +1288,48 @@ async function fetchAllRecords(){
   return all;
 }
 
+async function saveWeightsToSupabase(weights, grades){
+  if(!_sb) return;
+  try{
+    const row={id:1,w_freq:+weights.freq.toFixed(4),w_sequia:+weights.drought.toFixed(4),w_cooc:+weights.cooc.toFixed(4),
+      g_freq:grades&&grades.count>0?+grades.freq.toFixed(4):null,
+      g_sequia:grades&&grades.count>0?+grades.drought.toFixed(4):null,
+      g_cooc:grades&&grades.count>0?+grades.cooc.toFixed(4):null,
+      actualizado_en:new Date().toISOString()};
+    await _sb.from('modelo_pesos').upsert(row,{onConflict:'id'});
+  }catch(e){ console.warn('saveWeights (tabla opcional):',e.message); }
+}
+
+async function loadWeightsFromSupabase(){
+  if(!_sb) return null;
+  try{
+    const {data,error}=await _sb.from('modelo_pesos').select('*').eq('id',1).single();
+    if(error||!data) return null;
+    return {freq:data.w_freq, drought:data.w_sequia, cooc:data.w_cooc};
+  }catch(e){ return null; }
+}
+
+async function forceNewPrediction(){
+  const btn=document.getElementById('btnForzarPrediccion');
+  const note=document.getElementById('forzarNote');
+  if(!btn) return;
+  try{
+    btn.disabled=true;
+    if(note) note.style.display='block';
+    showStatus('⚡ Forzando nueva predicción: limpiando memoria del modelo…','loading');
+    try{ localStorage.removeItem('lastPrediction'); }catch(e){}
+    _weights={..._WEIGHTS_DEFAULT};
+    try{ localStorage.removeItem('modelWeights'); }catch(e){}
+    if(_sb){ try{ await _sb.from('modelo_pesos').delete().eq('id',1); }catch(e){} }
+    try{ localStorage.removeItem('lastPostMortem'); }catch(e){}
+    showStatus('⚡ Recalculando predicción con datos frescos…','loading');
+    await loadAndRender();
+  }finally{
+    btn.disabled=false;
+    if(note) setTimeout(()=>{ note.style.display='none'; },4000);
+  }
+}
+
 async function loadAndRender(){
   if(!_sb){ showStatus('⚠ Configura Supabase primero (sección de configuración arriba).','error'); return; }
   showStatus('⏳ Cargando datos desde Supabase…','loading');
@@ -1255,51 +1338,63 @@ async function loadAndRender(){
   try{
     const records=await fetchAllRecords();
     if(records.length===0){ showStatus('⚠ No hay registros en Supabase aún. Ingresa el primer sorteo.','error'); return; }
-    window._lastRecords=records; // expose for penalty display in renderAll
+    window._lastRecords=records;
 
-    // ── 1. LOAD STORED PREDICTION (before this load) ──────────────
+    // 1. Leer predicción guardada ANTES de procesar (para post-mortem correcto)
     const storedPred=loadStoredPrediction();
 
-    // ── 2. GRADE COMPONENTS & UPDATE WEIGHTS ──────────────────────
+    // 2. Cargar pesos desde Supabase (cross-device)
+    const remoteWeights=await loadWeightsFromSupabase();
+    if(remoteWeights&&typeof remoteWeights.freq==='number'){
+      _weights=remoteWeights;
+      try{ localStorage.setItem('modelWeights',JSON.stringify(_weights)); }catch(e){}
+    }
+
+    // 3. Detectar si hay sorteos nuevos (solo re-entrenar cuando hay datos nuevos)
+    const allD=[...new Set(records.map(r=>r.fecha))].sort();
+    const latestDrawDate=allD[allD.length-1]||'';
+    const hayDatosNuevos=!storedPred||!storedPred.latestDrawDate||latestDrawDate>storedPred.latestDrawDate;
+
+    // 4. Graduar componentes y actualizar pesos
     const P=records.filter(r=>r.tipo==='Principal').sort((a,b)=>a.fecha.localeCompare(b.fecha));
     const S=records.filter(r=>r.tipo==='Secundario').sort((a,b)=>a.fecha.localeCompare(b.fecha));
-    const gradesP=gradeComponents(P,20);
-    const gradesS=gradeComponents(S,20);
-    const avgGrades={
-      freq:   (gradesP.freq+gradesS.freq)/2,
-      drought:(gradesP.drought+gradesS.drought)/2,
-      cooc:   (gradesP.cooc+gradesS.cooc)/2,
-      count:  gradesP.count+gradesS.count
-    };
-    _weights=adjustWeights(_weights, avgGrades);
-    try{localStorage.setItem('modelWeights',JSON.stringify(_weights));}catch(e){}
+    let avgGrades={freq:22,drought:22,cooc:22,count:0};
+    if(hayDatosNuevos){
+      const gradesP=gradeComponents(P,20);
+      const gradesS=gradeComponents(S,20);
+      avgGrades={freq:(gradesP.freq+gradesS.freq)/2,drought:(gradesP.drought+gradesS.drought)/2,cooc:(gradesP.cooc+gradesS.cooc)/2,count:gradesP.count+gradesS.count};
+      _weights=adjustWeights(_weights,avgGrades);
+      try{ localStorage.setItem('modelWeights',JSON.stringify(_weights)); }catch(e){}
+      await saveWeightsToSupabase(_weights,avgGrades);
+    }
 
-    // ── 3. COMPUTE ALL STATS (uses updated _weights via global) ───
+    // 5. Computar estadísticas
     showStatus('⚙ Calculando análisis y ajustando pesos del modelo…','loading');
     const DATA=computeAll(records);
 
-    // ── 4. DETERMINE LATEST DRAW DATE & POST-MORTEM ───────────────
-    const allD=[...new Set(records.map(r=>r.fecha))].sort();
-    const latestDrawDate=allD[allD.length-1]||'';
-    const postMortemHTML=buildPostMortemHTML(storedPred, records);
-    const weightsHTML=buildWeightsHTML(_weights, avgGrades);
+    // 6. Post-mortem y pesos
+    const postMortemHTML=buildPostMortemHTML(storedPred,records);
+    const weightsHTML=buildWeightsHTML(_weights,avgGrades);
 
-    // ── 5. SAVE PREDICTION TO SUPABASE & LOAD HISTORY ────────────
+    // 7. Guardar predicción en Supabase (siempre actualiza con pesos más recientes)
     await savePredictionToSupabase(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario, _weights);
-    let predHistory = await loadPredictionHistory();
-    if(predHistory.length > 0){
-      await fillPredictionResults(predHistory, records);
-      predHistory = await loadPredictionHistory(); // reload after fills
+
+    // 8. Llenar resultados pendientes
+    let predHistory=await loadPredictionHistory();
+    if(predHistory.length>0){
+      await fillPredictionResults(predHistory,records);
+      predHistory=await loadPredictionHistory();
     }
 
-    // ── 6. RENDER ─────────────────────────────────────────────────
-    renderAll(DATA, records, {postMortemHTML, weightsHTML, predHistory});
+    // 9. Render
+    renderAll(DATA,records,{postMortemHTML,weightsHTML,predHistory});
 
-    // ── 7. STORE NEW PREDICTION (localStorage) for next post-mortem
+    // 10. Guardar predicción actual en localStorage (AL FINAL para próximo post-mortem)
     storePrediction(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario);
 
-    const wf=(_weights.freq*100).toFixed(0), wd=(_weights.drought*100).toFixed(0), wc=(_weights.cooc*100).toFixed(0);
-    showStatus(`✓ ${records.length} registros · Pesos ajustados: freq=${wf}% sequia=${wd}% cooc=${wc}%`,'ok');
+    const wf=(_weights.freq*100).toFixed(0),wd=(_weights.drought*100).toFixed(0),wc=(_weights.cooc*100).toFixed(0);
+    const statusExtra=hayDatosNuevos?` · Modelo re-entrenado`:` · Pesos sin cambio (no hay sorteos nuevos)`;
+    showStatus(`✓ ${records.length} registros · Pesos: freq=${wf}% sequía=${wd}% cooc=${wc}%${statusExtra}`,'ok');
   }catch(e){
     showStatus('✗ Error: '+e.message,'error');
     console.error(e);
@@ -1651,6 +1746,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('cfgUrl').value=_sbUrl;
   document.getElementById('cfgKey').value=_sbKey;
   document.getElementById('btnReanalizar').addEventListener('click',loadAndRender);
+  document.getElementById('btnForzarPrediccion').addEventListener('click',forceNewPrediction);
   document.getElementById('sorteoForm').addEventListener('submit',handleFormSubmit);
   // Init Supabase if credentials already saved
   if(_sbUrl && _sbKey){
