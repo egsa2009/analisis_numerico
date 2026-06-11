@@ -272,10 +272,6 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;align-items:center;">
     <button type="submit" id="btnGuardar" class="btn-primary">&#128190; Guardar Sorteo</button>
     <button type="button" id="btnReanalizar" class="btn-primary" style="background:var(--accent2);color:#0b0d12">&#128260; Re-Analizar (recargar BD)</button>
-    <button type="button" id="btnForzarPrediccion" class="btn-primary" style="background:#7c3aed;color:#fff;border:1.5px solid #a78bfa;" title="Limpia la memoria del modelo y recalcula la prediccion desde cero con todos los datos actuales">&#9889; Forzar Nueva Prediccion</button>
-  </div>
-  <div id="forzarNote" style="display:none;margin-top:8px;font-size:12px;color:#a78bfa;">
-    &#9889; Modo forzado: se borrara la prediccion guardada y los pesos se recalcularan desde cero con todos los datos actuales.
   </div>
 </form>
 
@@ -556,7 +552,7 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
   Si ves un error o tabla vacía, ejecuta el archivo <b>predicciones_schema.sql</b> en el SQL Editor de Supabase.
 </div>
 <div class="note" style="font-size:12.5px;margin-top:8px;">
-  <b>&#128309; Pesos persistentes (opcional):</b> Para sincronizar pesos entre dispositivos, crea la tabla <code>modelo_pesos</code>:
+  <b>&#128309; Pesos persistentes (opcional):</b> Para sincronizar pesos entre dispositivos crea en Supabase:
   <pre style="margin-top:8px;background:#1a2030;padding:10px;border-radius:6px;font-size:11px;overflow-x:auto;color:#bfd3ff">CREATE TABLE IF NOT EXISTS modelo_pesos (
   id integer PRIMARY KEY DEFAULT 1,
   w_freq numeric NOT NULL DEFAULT 0.35,
@@ -637,6 +633,7 @@ let _sb     = null;
 // ============================================================
 // ADAPTIVE WEIGHT SYSTEM
 // ============================================================
+// Pesos originales para los 3 criterios clásicos
 const _WEIGHTS_DEFAULT = {freq:0.35, drought:0.40, cooc:0.25};
 let _weights = {..._WEIGHTS_DEFAULT};
 try{
@@ -644,6 +641,21 @@ try{
   if(w && typeof w.freq==='number' && typeof w.drought==='number' && typeof w.cooc==='number')
     _weights = {freq:w.freq, drought:w.drought, cooc:w.cooc};
 }catch(e){}
+
+// Pesos para los 5 nuevos criterios de patrones
+const _PATTERN_WEIGHTS_DEFAULT = {parity:0.20, decades:0.20, sumRange:0.20, consecutive:0.20, gaps:0.20};
+let _patternWeights = {..._PATTERN_WEIGHTS_DEFAULT};
+try{
+  const pw = JSON.parse(localStorage.getItem('patternWeights')||'null');
+  if(pw && typeof pw.parity==='number') _patternWeights = pw;
+}catch(e){}
+
+// ── MARCA DE SESIÓN para detectar datos nuevos correctamente ──────────────────
+// En vez de comparar contra localStorage (que se actualiza al final del mismo render),
+// guardamos la fecha conocida AL INICIO de cada sesión de página.
+// Así, si en esta misma sesión se ingresa un sorteo nuevo, la PRÓXIMA vez que se
+// ejecute loadAndRender (por Re-Analizar o Guardar) SÍ detectará el cambio.
+let _sessionBaseDate = null; // se fija la primera vez que se cargan datos
 
 function initSupabase(url, key){
   if(!url||!key) return false;
@@ -852,21 +864,46 @@ function loadLastPostMortem(){
 async function savePredictionToSupabase(ultimoSorteo, predP, predS, weights){
   if(!_sb) return;
   const today = new Date().toISOString().split('T')[0];
-  for(const [tipo, pred] of [['Principal',predP],['Secundario',predS]]){
+  // Bug 1 fix: si _tipo_override está presente, solo guardar ese tipo
+  // Esto permite llamar con predP=null o predS=null para guardar solo uno.
+  const pairs = [];
+  if(predP && predP.combo_deterministic_top5) pairs.push(['Principal', predP]);
+  if(predS && predS.combo_deterministic_top5) pairs.push(['Secundario', predS]);
+  for(const [tipo, pred] of pairs){
     if(!pred||!pred.combo_deterministic_top5) continue;
     const bal = pred.combo_balanced.slice(0,5).sort((a,b)=>a-b);
-    const row = {
-      tipo, generada_en: today, ultimo_sorteo: ultimoSorteo,
-      d1:pred.combo_deterministic_top5[0], d2:pred.combo_deterministic_top5[1],
-      d3:pred.combo_deterministic_top5[2], d4:pred.combo_deterministic_top5[3],
-      d5:pred.combo_deterministic_top5[4], d_diff:pred.combo_deterministic_diff,
-      b1:bal[0], b2:bal[1], b3:bal[2], b4:bal[3], b5:bal[4],
-      b_diff: pred.ranking_diff[0][0],
-      w_freq:+weights.freq.toFixed(4), w_sequia:+weights.drought.toFixed(4), w_cooc:+weights.cooc.toFixed(4)
-    };
+
+    // ── BUG 2 FIX: proteger histórico ─────────────────────────────
+    // Primero verificar si ya existe un registro para este tipo+ultimo_sorteo.
+    // Si existe: solo actualizar pesos (nunca el combo, para no corromper histórico).
+    // Si no existe: insertar el registro completo.
     try{
-      // FIX: sin ignoreDuplicates → siempre actualiza con los pesos mas recientes
-      await _sb.from('predicciones').upsert(row, {onConflict:'tipo,ultimo_sorteo'});
+      const {data:existing} = await _sb.from('predicciones')
+        .select('id')
+        .eq('tipo', tipo)
+        .eq('ultimo_sorteo', ultimoSorteo)
+        .maybeSingle();
+
+      if(existing){
+        // Solo actualizar pesos y generada_en — NUNCA tocar d1-d5, b1-b5, d_diff
+        await _sb.from('predicciones').update({
+          w_freq:  +weights.freq.toFixed(4),
+          w_sequia:+weights.drought.toFixed(4),
+          w_cooc:  +weights.cooc.toFixed(4)
+        }).eq('id', existing.id);
+      } else {
+        // Registro nuevo: insertar completo
+        const row = {
+          tipo, generada_en: today, ultimo_sorteo: ultimoSorteo,
+          d1:pred.combo_deterministic_top5[0], d2:pred.combo_deterministic_top5[1],
+          d3:pred.combo_deterministic_top5[2], d4:pred.combo_deterministic_top5[3],
+          d5:pred.combo_deterministic_top5[4], d_diff:pred.combo_deterministic_diff,
+          b1:bal[0], b2:bal[1], b3:bal[2], b4:bal[3], b5:bal[4],
+          b_diff: pred.ranking_diff[0][0],
+          w_freq:+weights.freq.toFixed(4), w_sequia:+weights.drought.toFixed(4), w_cooc:+weights.cooc.toFixed(4)
+        };
+        await _sb.from('predicciones').insert(row);
+      }
     }catch(e){ console.warn('savePrediction error:',e.message); }
   }
 }
@@ -884,9 +921,9 @@ async function fillPredictionResults(predHistory, sorteoRecords){
   if(!_sb||!predHistory.length) return;
   const unresolved = predHistory.filter(p=>p.aciertos_det===null||p.aciertos_det===undefined);
   for(const pred of unresolved){
-    // Solo llenar si el sorteo real ocurrió DESPUÉS de que se generó la predicción
-    // Esto evita vincular resultados que ya existían cuando se guardó la predicción
-    // FIX: solo filtrar por fecha posterior a ultimo_sorteo
+    // BUG 3 FIX: solo filtrar por r.fecha > ultimo_sorteo.
+    // El filtro >= generada_en era incorrecto: bloqueaba sorteos reales válidos
+    // cuando la predicción había sido generada en una fecha anterior a la del sorteo.
     const nextActual = sorteoRecords
       .filter(r=>r.tipo===pred.tipo && r.fecha>pred.ultimo_sorteo)
       .sort((a,b)=>a.fecha.localeCompare(b.fecha))[0];
@@ -994,6 +1031,179 @@ function computeComponentScores(draws){
   return {freq,drought,cooc};
 }
 
+// ============================================================
+// PATTERN ANALYSIS ENGINE (5 nuevos criterios)
+// ============================================================
+function computePatternSignals(draws, windowN=20){
+  // Analiza los últimos windowN sorteos para extraer señales de patrones
+  if(!draws||draws.length<5) return null;
+  const recent=draws.slice(-windowN);
+  const n=recent.length;
+
+  // 1. PARIDAD: distribución pares/impares en los últimos sorteos
+  const parityDist=[0,0,0,0,0,0]; // índice = cantidad de pares (0-5)
+  for(const r of recent){
+    const nums=[r.n1,r.n2,r.n3,r.n4,r.n5];
+    parityDist[nums.filter(x=>x%2===0).length]++;
+  }
+  const expectedParityIdx=parityDist.indexOf(Math.max(...parityDist)); // patrón más frecuente
+
+  // 2. DECENAS: qué rangos han aparecido más
+  const decadeFreq={'D1':0,'D2':0,'D3':0,'D4':0,'D5':0};
+  for(const r of recent){
+    [r.n1,r.n2,r.n3,r.n4,r.n5].forEach(n=>{
+      if(n<=10) decadeFreq['D1']++;
+      else if(n<=20) decadeFreq['D2']++;
+      else if(n<=30) decadeFreq['D3']++;
+      else if(n<=40) decadeFreq['D4']++;
+      else decadeFreq['D5']++;
+    });
+  }
+
+  // 3. SUMA: rango de suma más frecuente en los últimos sorteos
+  const sums=recent.map(r=>r.n1+r.n2+r.n3+r.n4+r.n5);
+  const sumMean=sums.reduce((a,b)=>a+b,0)/n;
+  const sumStd=Math.sqrt(sums.reduce((a,b)=>a+(b-sumMean)**2,0)/n)||1;
+  const sumLow=sumMean-sumStd, sumHigh=sumMean+sumStd;
+
+  // 4. CONSECUTIVOS: frecuencia de números consecutivos en los sorteos recientes
+  const consec=[]; // cuántos pares consecutivos hubo en cada sorteo
+  for(const r of recent){
+    const nums=[r.n1,r.n2,r.n3,r.n4,r.n5].sort((a,b)=>a-b);
+    let c=0;for(let i=0;i<4;i++) if(nums[i+1]-nums[i]===1)c++;
+    consec.push(c);
+  }
+  const avgConsec=consec.reduce((a,b)=>a+b,0)/n;
+
+  // 5. GAPS: números con gap actual > gap_medio histórico (candidatos a "volver")
+  const gapScores={};
+  for(let i=1;i<=43;i++){
+    let drought=0,lastSeen=-1;
+    for(let j=0;j<draws.length;j++){
+      if([draws[j].n1,draws[j].n2,draws[j].n3,draws[j].n4,draws[j].n5].includes(i)){lastSeen=j;}
+    }
+    drought=lastSeen>=0?draws.length-1-lastSeen:draws.length;
+    // Gap histórico medio
+    const gaps=[];let prev=-1;
+    for(let j=0;j<draws.length;j++){
+      if([draws[j].n1,draws[j].n2,draws[j].n3,draws[j].n4,draws[j].n5].includes(i)){
+        if(prev>=0)gaps.push(j-prev);prev=j;
+      }
+    }
+    const meanGap=gaps.length>0?gaps.reduce((a,b)=>a+b,0)/gaps.length:(43/5);
+    // Score: cuánto más lleva sin salir vs su promedio (normalizado)
+    gapScores[i]=Math.min(2.0, drought/Math.max(meanGap,1));
+  }
+
+  return {parityDist,expectedParityIdx,decadeFreq,sumMean,sumStd,sumLow,sumHigh,avgConsec,gapScores};
+}
+
+// Calcula un score de patrón para cada número basado en los 5 criterios
+function computePatternScore(num, patternSignals, currentDrawNums){
+  if(!patternSignals) return 0.5;
+  let score=0;
+
+  // 1. Paridad: favorece números que mantienen la distribución pares/impares esperada
+  const isEven=num%2===0;
+  const evenCount=(currentDrawNums||[]).filter(x=>x%2===0).length;
+  const targetEven=patternSignals.expectedParityIdx;
+  if(isEven && evenCount<targetEven) score+=1;
+  else if(!isEven && (5-evenCount)<(5-targetEven)) score+=1;
+  else score+=0.3;
+
+  // 2. Decenas: favorece décadas sub-representadas en los últimos sorteos
+  const decade=num<=10?'D1':num<=20?'D2':num<=30?'D3':num<=40?'D4':'D5';
+  const avgDecFreq=Object.values(patternSignals.decadeFreq).reduce((a,b)=>a+b,0)/5;
+  const relFreq=patternSignals.decadeFreq[decade]/Math.max(avgDecFreq,1);
+  score += relFreq<0.9?1.2:relFreq<1.1?0.8:0.4; // sub-representada → mayor score
+
+  // 3. Suma: favorece números que contribuirían a una suma en el rango típico
+  const partialSum=(currentDrawNums||[]).reduce((a,b)=>a+b,0);
+  const remaining=5-(currentDrawNums||[]).length;
+  if(remaining>0){
+    const projectedSum=partialSum+num+(remaining-1)*22; // estimado con promedio
+    if(projectedSum>=patternSignals.sumLow&&projectedSum<=patternSignals.sumHigh) score+=1.2;
+    else score+=0.4;
+  } else score+=0.8;
+
+  // 4. Consecutivos: si hay pocos consecutivos recientes, favorece números no adyacentes a los ya elegidos
+  const hasAdj=(currentDrawNums||[]).some(x=>Math.abs(x-num)===1);
+  if(patternSignals.avgConsec<0.8){
+    score += hasAdj?0.3:1.0; // pocos consecutivos históricos → preferir no adyacentes
+  } else {
+    score += hasAdj?1.0:0.7; // muchos consecutivos históricos → neutro/favorable
+  }
+
+  // 5. Gaps: favorece números cuyo gap actual supera su media histórica
+  const gs=patternSignals.gapScores[num]||1.0;
+  score += Math.min(2.0, gs)*0.8; // hasta 1.6 puntos extra
+
+  return score; // rango aprox 0-6.8
+}
+
+// Califica qué tan bien predijo cada criterio de patrón (para ajustar pesos)
+function gradePatternComponents(draws, lastN=20){
+  if(draws.length < lastN+10) return _PATTERN_WEIGHTS_DEFAULT;
+  const trainDraws=draws.slice(0,-lastN);
+  const testDraws=draws.slice(-lastN);
+  const signals=computePatternSignals(trainDraws, Math.min(20,trainDraws.length));
+  if(!signals) return _PATTERN_WEIGHTS_DEFAULT;
+
+  // Para cada sorteo del test, ver qué criterio "predijo" mejor (score más alto para los actuales vs no actuales)
+  const hits={parity:0,decades:0,sumRange:0,consecutive:0,gaps:0};
+  const total=testDraws.length;
+  for(const draw of testDraws){
+    const actual=[draw.n1,draw.n2,draw.n3,draw.n4,draw.n5];
+    // Calcular score de los 5 actuales vs promedio de todos
+    const allScores={parity:[],decades:[],sumRange:[],consecutive:[],gaps:[]};
+    for(let i=1;i<=43;i++){
+      const gs=patternSignals_decomposed(i,signals);
+      for(const k in gs) allScores[k].push(gs[k]);
+    }
+    for(const k in hits){
+      const avgAll=allScores[k].reduce((a,b)=>a+b,0)/43;
+      const avgActual=actual.map(n=>patternSignals_decomposed(n,signals)[k]).reduce((a,b)=>a+b,0)/5;
+      if(avgActual>avgAll) hits[k]++;
+    }
+  }
+  // Convertir hits en pesos normalizados
+  const raw={};
+  for(const k in hits) raw[k]=Math.max(0.05, hits[k]/Math.max(total,1));
+  const tot=Object.values(raw).reduce((a,b)=>a+b,0)||1;
+  const newWeights={};
+  for(const k in raw) newWeights[k]=raw[k]/tot;
+  // Blend: 70% actual + 30% nuevo
+  const blended={};
+  for(const k in newWeights){
+    blended[k]=0.70*(_patternWeights[k]||0.20)+0.30*newWeights[k];
+    blended[k]=Math.min(0.60,Math.max(0.05,blended[k]));
+  }
+  const s=Object.values(blended).reduce((a,b)=>a+b,0)||1;
+  for(const k in blended) blended[k]/=s;
+  return blended;
+}
+
+function patternSignals_decomposed(num, signals){
+  // Retorna scores individuales por criterio (para análisis)
+  const isEven=num%2===0;
+  const evenExpected=signals.expectedParityIdx;
+  const parity=isEven&&evenExpected>2?1.2:!isEven&&evenExpected<3?1.2:0.5;
+
+  const decade=num<=10?'D1':num<=20?'D2':num<=30?'D3':num<=40?'D4':'D5';
+  const avgDF=Object.values(signals.decadeFreq).reduce((a,b)=>a+b,0)/5;
+  const decades=(signals.decadeFreq[decade]/Math.max(avgDF,1))<0.9?1.2:0.6;
+
+  const estimatedContrib=num; // contribución directa
+  const inRange=estimatedContrib>=(signals.sumLow/5)&&estimatedContrib<=(signals.sumHigh/5)?1.2:0.6;
+
+  const gs=signals.gapScores[num]||1.0;
+  const gaps=Math.min(2.0,gs)*0.8;
+
+  const consecutive=0.7; // neutral sin contexto del combo actual
+
+  return {parity,decades,sumRange:inRange,consecutive,gaps};
+}
+
 // Grade how well each component ranked actual drawn numbers
 // Higher avg rank (out of 43) = component predicted those numbers better
 function gradeComponents(draws, lastN=20){
@@ -1046,6 +1256,9 @@ function adjustWeights(currentWeights, grades){
 
 // Store the prediction for future post-mortem
 function storePrediction(latestDrawDate, predP, predS){
+  // BUG 1 FIX: guardar predicciones de Principal y Secundario con sus fechas base
+  // separadas para que ingresar el Secundario no pise la predicción del Principal.
+  // También guardar los pesos para calcular delta en el siguiente post-mortem.
   const stored={
     storedAt: new Date().toISOString(),
     latestDrawDate,
@@ -1054,6 +1267,9 @@ function storePrediction(latestDrawDate, predP, predS){
     weights:{freq:_weights.freq, drought:_weights.drought, cooc:_weights.cooc}
   };
   try{localStorage.setItem('lastPrediction', JSON.stringify(stored));}catch(e){}
+  // También guardar por tipo por separado para que cada uno tenga su propia versión
+  try{localStorage.setItem('lastPrediction_Principal', JSON.stringify({...stored, latestDrawDate_tipo: latestDrawDate}));}catch(e){}
+  try{localStorage.setItem('lastPrediction_Secundario', JSON.stringify({...stored, latestDrawDate_tipo: latestDrawDate}));}catch(e){}
   return stored;
 }
 
@@ -1073,11 +1289,15 @@ function buildPostMortemHTML(stored, allDraws){
     return last||'<p class="pred-placeholder">&#10003; Predicción guardada. El análisis aparecerá cuando registres el próximo sorteo.</p>';
   }
   let html='';
+  // Tomar todos los registros para análisis de patrones
+  const allP=allDraws.filter(r=>r.tipo==='Principal').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const allS=allDraws.filter(r=>r.tipo==='Secundario').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+
   for(const tipo of ['Principal','Secundario']){
     const pred=stored[tipo];
     const actual=[...newDraws].filter(r=>r.tipo===tipo).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
     if(!actual||!pred) continue;
-    const actualNums=[actual.n1,actual.n2,actual.n3,actual.n4,actual.n5];
+    const actualNums=[actual.n1,actual.n2,actual.n3,actual.n4,actual.n5].sort((a,b)=>a-b);
     const hits=pred.nums.filter(n=>actualNums.includes(n));
     const misses=pred.nums.filter(n=>!actualNums.includes(n));
     const surprises=actualNums.filter(n=>!pred.nums.includes(n));
@@ -1085,10 +1305,53 @@ function buildPostMortemHTML(stored, allDraws){
     const hc=hits.length;
     const scoreColor=hc>=3?'#4ade80':(hc>=1?'#ffb53e':'#f87171');
     const titleColor=tipo==='Principal'?'#4ade80':'#93c5fd';
+
+    // ── Análisis profundo de patrones del sorteo real ─────────────
+    const drawsForType=tipo==='Principal'?allP:allS;
+    const prevDraws=drawsForType.filter(r=>r.fecha<actual.fecha);
+    const prevSignals=prevDraws.length>=5?computePatternSignals(prevDraws,20):null;
+
+    // Paridad
+    const evenCount=actualNums.filter(x=>x%2===0).length;
+    const oddCount=5-evenCount;
+    const parityStr=`${evenCount} par${evenCount!==1?'es':''} / ${oddCount} impar${oddCount!==1?'es':''}`;
+    const expectedParity=prevSignals?prevSignals.expectedParityIdx:'-';
+    const parityMatch=prevSignals?(evenCount===expectedParity?'✓':'✗'):'-';
+
+    // Decenas
+    const decCount={'D1(1-10)':0,'D2(11-20)':0,'D3(21-30)':0,'D4(31-40)':0,'D5(41-43)':0};
+    actualNums.forEach(n=>{
+      if(n<=10)decCount['D1(1-10)']++;
+      else if(n<=20)decCount['D2(11-20)']++;
+      else if(n<=30)decCount['D3(21-30)']++;
+      else if(n<=40)decCount['D4(31-40)']++;
+      else decCount['D5(41-43)']++;
+    });
+    const decStr=Object.entries(decCount).filter(([,v])=>v>0).map(([k,v])=>`${k}:${v}`).join(' · ');
+
+    // Suma
+    const suma=actualNums.reduce((a,b)=>a+b,0);
+    const sumaRange=prevSignals?`(rango esperado: ${Math.round(prevSignals.sumLow)}–${Math.round(prevSignals.sumHigh)})`:'';
+    const sumaMatch=prevSignals?(suma>=prevSignals.sumLow&&suma<=prevSignals.sumHigh?'✓ dentro':'⚠ fuera'):'';
+
+    // Consecutivos
+    const consecPairs=[];
+    for(let i=0;i<4;i++) if(actualNums[i+1]-actualNums[i]===1) consecPairs.push(`${actualNums[i]}-${actualNums[i+1]}`);
+    const consecStr=consecPairs.length>0?consecPairs.join(', '):'ninguno';
+
+    // Gaps: números con sequía notable que salieron
+    let gapInsight='';
+    if(prevSignals){
+      const highGapNums=actualNums.filter(n=>(prevSignals.gapScores[n]||0)>1.2);
+      const lowGapNums=actualNums.filter(n=>(prevSignals.gapScores[n]||0)<0.7);
+      if(highGapNums.length>0) gapInsight+=`<span style="color:#4ade80">Con sequía notable: ${highGapNums.map(n=>`#${n}`).join(', ')}</span> `;
+      if(lowGapNums.length>0) gapInsight+=`<span style="color:#f87171">Recién vistos: ${lowGapNums.map(n=>`#${n}`).join(', ')}</span>`;
+    }
+
     html+=`<div class="postmortem-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <span style="color:${titleColor};font-weight:700;font-size:12.5px">${tipo} · ${actual.fecha}</span>
-        <span class="score-badge" style="background:${scoreColor}22;color:${scoreColor}">${hc}/5 aciertos${diffHit?' + diff ✓':''}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="color:${titleColor};font-weight:700;font-size:12.5px">🎯 ${tipo} · ${actual.fecha}</span>
+        <span class="score-badge" style="background:${scoreColor}22;color:${scoreColor};font-size:13px;padding:4px 12px">${hc}/5 aciertos${diffHit?' + diff ✓':''}</span>
       </div>
       <div class="pm-row">
         <span class="pm-label">Predicho</span>
@@ -1097,17 +1360,27 @@ function buildPostMortemHTML(stored, allDraws){
       <div class="pm-row">
         <span class="pm-label">Real</span>
         <div class="pm-balls">${actualNums.map(n=>`<span class="ball-sm ${hits.includes(n)?'ball-hit':'ball-surp'}">${n}</span>`).join('')}<span class="pm-sep">+</span><span class="ball-sm ${diffHit?'ball-hit-d':'ball-surp-d'}">${actual.diff}</span></div>
+      </div>
+      <div style="margin-top:12px;background:#12151e;border-radius:8px;padding:10px 14px;font-size:12px;">
+        <div style="color:#a78bfa;font-weight:700;margin-bottom:8px;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;">📊 Análisis Profundo de Patrones</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;">
+          <div><span style="color:var(--muted)">Paridad:</span> <b>${parityStr}</b> <span style="color:${parityMatch==='✓'?'#4ade80':'#f87171'}">${parityMatch}</span></div>
+          <div><span style="color:var(--muted)">Suma:</span> <b>${suma}</b> <span style="color:${sumaMatch.includes('✓')?'#4ade80':'#facc15'}">${sumaMatch}</span> ${sumaRange}</div>
+          <div style="grid-column:1/-1"><span style="color:var(--muted)">Décadas:</span> <b>${decStr}</b></div>
+          <div><span style="color:var(--muted)">Consecutivos:</span> <b>${consecStr}</b></div>
+          <div>${gapInsight||'<span style="color:var(--muted)">Gaps: sin datos previos</span>'}</div>
+        </div>
       </div>`;
     if(surprises.length>0){
       html+=`<div style="margin-top:8px;font-size:11.5px;color:var(--muted)">
-        <b style="color:#fbbf24">Inesperados:</b> ${surprises.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
-        <span style="color:#6b7280"> — tenían probabilidad positiva en el modelo pero fuera del top-5</span>
+        <b style="color:#fbbf24">⚡ Inesperados:</b> ${surprises.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
+        <span style="color:#6b7280"> — fuera del top-5 del modelo</span>
       </div>`;
     }
     if(misses.length>0){
       html+=`<div style="font-size:11.5px;color:var(--muted);margin-top:4px">
-        <b style="color:#f87171">Fallados:</b> ${misses.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
-        <span style="color:#6b7280"> — el modelo los priorizó pero no salieron</span>
+        <b style="color:#f87171">✗ Fallados:</b> ${misses.map(n=>`<span class="chip">#${n}</span>`).join(' ')}
+        <span style="color:#6b7280"> — el modelo los priorizó pero no salieron → rotación activa</span>
       </div>`;
     }
     html+=`</div>`;
@@ -1141,17 +1414,53 @@ function buildWeightsHTML(weights, grades){
       <span style="color:#6b7280">Valores positivos = el componente apuntó hacia los números que salieron</span>
     </div>`;
   }
+  const patLabels={parity:'Paridad',decades:'Décadas',sumRange:'Suma-Rango',consecutive:'Consecutivos',gaps:'Gaps'};
+  const patColors={parity:'#c084fc',decades:'#f472b6',sumRange:'#fb923c',consecutive:'#34d399',gaps:'#60a5fa'};
+  function patRow(label,key,color){
+    const pct=((_patternWeights[key]||0.20)*100).toFixed(1);
+    const def=((_PATTERN_WEIGHTS_DEFAULT[key]||0.20)*100).toFixed(1);
+    const delta=((_patternWeights[key]||0.20)-(_PATTERN_WEIGHTS_DEFAULT[key]||0.20))*100;
+    const dStr=(delta>=0?'+':'')+delta.toFixed(1)+'%';
+    const dColor=delta>0.5?'#86efac':(delta<-0.5?'#f87171':'#9ca3af');
+    return `<div class="weight-row">
+      <div class="weight-label">${label}<br><small style="color:var(--muted)">${pct}%</small></div>
+      <div class="weight-bar-wrap"><div class="weight-bar" style="width:${pct}%;background:${color}"></div></div>
+      <div class="weight-delta" style="color:${dColor}">${dStr}</div>
+    </div>`;
+  }
+  const patSection=`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+    <div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">📐 Pesos — 5 Criterios de Patrones (25% del modelo)</div>
+    ${Object.keys(_PATTERN_WEIGHTS_DEFAULT).map(k=>patRow(patLabels[k],k,patColors[k])).join('')}
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (20% c/u) · Aprende de los últimos 20 sorteos</div>
+  </div>`;
   return `${row('Frecuencia','freq','#3ea6ff')}${row('Sequía','drought','#4ade80')}${row('Coocurrencia','cooc','#ffb53e')}
-  <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Se actualizan con cada carga</div>${perf}`;
+  <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Modelo clásico (75% del score total)</div>${perf}${patSection}`;
 }
 
 function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
   if(!freq||!patterns||!pairs) return null;
   const fv=Object.values(freq.freq_main);
   const maxF=Math.max(...fv),minF=Math.min(...fv);
-  // Cap drought at 2.5× expected gap (43 numbers, 5 drawn → expected gap ≈ 8.6 sorteos)
-  // This prevents numbers that keep missing from dominating the model indefinitely
-  const droughtCap=(43/5)*2.5; // ≈21.5 sorteos
+  const droughtCap=(43/5)*2.5;
+
+  // Señales de patrones para los 5 nuevos criterios
+  const patSignals=computePatternSignals(draws, 20);
+
+  // Normalizar scores de patrones para todos los números
+  const rawPatScores={};
+  let minPat=Infinity,maxPat=-Infinity;
+  for(let i=1;i<=43;i++){
+    const ps=patternSignals_decomposed(i,patSignals||{expectedParityIdx:2,decadeFreq:{D1:20,D2:20,D3:20,D4:20,D5:20},sumLow:90,sumHigh:130,avgConsec:0.5,gapScores:{}});
+    rawPatScores[i]=(_patternWeights.parity||0.20)*ps.parity
+      +(_patternWeights.decades||0.20)*ps.decades
+      +(_patternWeights.sumRange||0.20)*ps.sumRange
+      +(_patternWeights.consecutive||0.20)*ps.consecutive
+      +(_patternWeights.gaps||0.20)*ps.gaps;
+    if(rawPatScores[i]<minPat) minPat=rawPatScores[i];
+    if(rawPatScores[i]>maxPat) maxPat=rawPatScores[i];
+  }
+  const patRange=maxPat-minPat||1;
+
   const sm={};
   for(let i=1;i<=43;i++){
     const fs=maxF>minF?(freq.freq_main[i]-minF)/(maxF-minF):0.5;
@@ -1163,15 +1472,19 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
       ps+=(pairs.pair_count[`${a}-${b}`]||0);
     });
     ps=Math.min(1,ps/(5*(freq.top10_main[0]?freq.top10_main[0][1]:1)+1));
-    // Apply 20% penalty to numbers predicted last time but not drawn (to encourage rotation)
+    // Score normalizado de patrones (0-1)
+    const patScore=(rawPatScores[i]-minPat)/patRange;
+    // Mezcla: 75% modelo clásico + 25% patrones nuevos
+    const classicScore=_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps;
+    const blendedScore=0.75*classicScore+0.25*patScore;
     const penalty=penaltyNums.has(i)?0.80:1.0;
-    sm[i]=(_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps)*penalty;
+    sm[i]=blendedScore*penalty;
   }
   const totM=Object.values(sm).reduce((a,b)=>a+b,0)||1;
   const nm={};for(let i=1;i<=43;i++) nm[i]=sm[i]/totM;
   const dfv=Object.values(freq.freq_diff);
   const mxDF=Math.max(...dfv)||1,mnDF=Math.min(...dfv);
-  // FIX: calcular sequía del diferente (igual que para los principales)
+  // Bug fix: calcular sequia del diferente y combinar con frecuencia (igual que principales)
   const droughtDiff={};
   for(let i=1;i<=16;i++) droughtDiff[i]=0;
   for(let d=draws.length-1;d>=0;d--){
@@ -1179,19 +1492,13 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
     if(droughtDiff[dv]===0) droughtDiff[dv]=draws.length-d;
   }
   for(let i=1;i<=16;i++) if(droughtDiff[i]===0) droughtDiff[i]=draws.length;
-  const droughtCapD=(16/1)*2.5; // cap para diff: ~40
-  const mxDro=Math.max(...Object.values(droughtDiff));
+  const droughtCapD=40;
   const sd={};
   for(let i=1;i<=16;i++){
-    // Score frecuencia normalizado [0,1]
     const fn=mxDF>mnDF?(freq.freq_diff[i]-mnDF)/(mxDF-mnDF):0.5;
-    // Score sequía normalizado [0,1] con cap
-    const rawDro=droughtDiff[i];
-    const ds=Math.min(rawDro,droughtCapD)/droughtCapD;
-    // Combinado: 60% frecuencia + 40% sequía (igual que modelo principal)
+    const ds=Math.min(droughtDiff[i],droughtCapD)/droughtCapD;
     const base=0.60*fn+0.40*ds;
-    // Penalizar diff si falló en la última predicción guardada
-    const diffPenalty=penaltyNums.has(-i)?0.75:1.0; // usar índice negativo para diferenciar
+    const diffPenalty=penaltyNums.has(-i)?0.75:1.0;
     sd[i]=base*diffPenalty;
   }
   const totD=Object.values(sd).reduce((a,b)=>a+b,0)||1;
@@ -1244,15 +1551,12 @@ function computeAll(records){
       if(newDrawsP.length>0&&sp.Principal){
         const actualP=new Set([newDrawsP[0].n1,newDrawsP[0].n2,newDrawsP[0].n3,newDrawsP[0].n4,newDrawsP[0].n5]);
         sp.Principal.nums.forEach(n=>{if(!actualP.has(n))penaltyP.add(n);});
-        // Penalizar diff si también falló (índice negativo para distinguirlo de principales)
-        if(sp.Principal.diff!==undefined && sp.Principal.diff!==newDrawsP[0].diff)
-          penaltyP.add(-sp.Principal.diff);
+        if(sp.Principal.diff!==undefined&&sp.Principal.diff!==newDrawsP[0].diff) penaltyP.add(-sp.Principal.diff);
       }
       if(newDrawsS.length>0&&sp.Secundario){
         const actualS=new Set([newDrawsS[0].n1,newDrawsS[0].n2,newDrawsS[0].n3,newDrawsS[0].n4,newDrawsS[0].n5]);
         sp.Secundario.nums.forEach(n=>{if(!actualS.has(n))penaltyS.add(n);});
-        if(sp.Secundario.diff!==undefined && sp.Secundario.diff!==newDrawsS[0].diff)
-          penaltyS.add(-sp.Secundario.diff);
+        if(sp.Secundario.diff!==undefined&&sp.Secundario.diff!==newDrawsS[0].diff) penaltyS.add(-sp.Secundario.diff);
       }
     }
   }catch(e){}
@@ -1291,11 +1595,15 @@ async function fetchAllRecords(){
 async function saveWeightsToSupabase(weights, grades){
   if(!_sb) return;
   try{
-    const row={id:1,w_freq:+weights.freq.toFixed(4),w_sequia:+weights.drought.toFixed(4),w_cooc:+weights.cooc.toFixed(4),
-      g_freq:grades&&grades.count>0?+grades.freq.toFixed(4):null,
+    const row={id:1,
+      w_freq:  +weights.freq.toFixed(4),
+      w_sequia:+weights.drought.toFixed(4),
+      w_cooc:  +weights.cooc.toFixed(4),
+      g_freq:  grades&&grades.count>0?+grades.freq.toFixed(4):null,
       g_sequia:grades&&grades.count>0?+grades.drought.toFixed(4):null,
-      g_cooc:grades&&grades.count>0?+grades.cooc.toFixed(4):null,
-      actualizado_en:new Date().toISOString()};
+      g_cooc:  grades&&grades.count>0?+grades.cooc.toFixed(4):null,
+      actualizado_en:new Date().toISOString()
+    };
     await _sb.from('modelo_pesos').upsert(row,{onConflict:'id'});
   }catch(e){ console.warn('saveWeights (tabla opcional):',e.message); }
 }
@@ -1318,11 +1626,17 @@ async function forceNewPrediction(){
     if(note) note.style.display='block';
     showStatus('⚡ Forzando nueva predicción: limpiando memoria del modelo…','loading');
     try{ localStorage.removeItem('lastPrediction'); }catch(e){}
+    try{ localStorage.removeItem('lastPrediction_Principal'); }catch(e){}
+    try{ localStorage.removeItem('lastPrediction_Secundario'); }catch(e){}
     _weights={..._WEIGHTS_DEFAULT};
+    _patternWeights={..._PATTERN_WEIGHTS_DEFAULT};
     try{ localStorage.removeItem('modelWeights'); }catch(e){}
+    try{ localStorage.removeItem('patternWeights'); }catch(e){}
     if(_sb){ try{ await _sb.from('modelo_pesos').delete().eq('id',1); }catch(e){} }
     try{ localStorage.removeItem('lastPostMortem'); }catch(e){}
-    showStatus('⚡ Recalculando predicción con datos frescos…','loading');
+    // Marcar que los pesos remotos ya fueron borrados y resetear la base de sesión
+    window._forceReset = true;
+    _sessionBaseDate = ''; // forzar re-entrenamiento completo
     await loadAndRender();
   }finally{
     btn.disabled=false;
@@ -1340,56 +1654,93 @@ async function loadAndRender(){
     if(records.length===0){ showStatus('⚠ No hay registros en Supabase aún. Ingresa el primer sorteo.','error'); return; }
     window._lastRecords=records;
 
-    // 1. Leer predicción guardada ANTES de procesar (para post-mortem correcto)
+    // ── 1. Leer predicción guardada ANTES de procesar ─────────────
     const storedPred=loadStoredPrediction();
 
-    // 2. Cargar pesos desde Supabase (cross-device)
-    const remoteWeights=await loadWeightsFromSupabase();
-    if(remoteWeights&&typeof remoteWeights.freq==='number'){
-      _weights=remoteWeights;
-      try{ localStorage.setItem('modelWeights',JSON.stringify(_weights)); }catch(e){}
+    // ── 2. Cargar pesos desde Supabase (cross-device) ─────────────
+    // NOTA: si _forceReset está activo, NO cargar pesos remotos (ya fueron borrados)
+    if(!window._forceReset){
+      const remoteWeights=await loadWeightsFromSupabase();
+      if(remoteWeights&&typeof remoteWeights.freq==='number'){
+        _weights=remoteWeights;
+        try{ localStorage.setItem('modelWeights',JSON.stringify(_weights)); }catch(e){}
+      }
     }
+    window._forceReset=false;
 
-    // 3. Detectar si hay sorteos nuevos (solo re-entrenar cuando hay datos nuevos)
-    const allD=[...new Set(records.map(r=>r.fecha))].sort();
-    const latestDrawDate=allD[allD.length-1]||'';
-    const hayDatosNuevos=!storedPred||!storedPred.latestDrawDate||latestDrawDate>storedPred.latestDrawDate;
-
-    // 4. Graduar componentes y actualizar pesos
+    // ── 3. Calcular ultimo_sorteo POR TIPO ────────────────────────
     const P=records.filter(r=>r.tipo==='Principal').sort((a,b)=>a.fecha.localeCompare(b.fecha));
     const S=records.filter(r=>r.tipo==='Secundario').sort((a,b)=>a.fecha.localeCompare(b.fecha));
+    const latestP=P.length?P[P.length-1].fecha:'';
+    const latestS=S.length?S[S.length-1].fecha:'';
+    const latestDrawDate=[latestP,latestS].filter(Boolean).sort().pop()||'';
+
+    // ── FIX CRÍTICO: Detección de datos nuevos ────────────────────
+    // _sessionBaseDate se fija UNA sola vez al inicio de la sesión de página.
+    // Esto garantiza que al guardar un sorteo nuevo, la siguiente llamada a
+    // loadAndRender SÍ detecte el cambio y re-entrene el modelo.
+    if(_sessionBaseDate === null){
+      _sessionBaseDate = storedPred&&storedPred.latestDrawDate ? storedPred.latestDrawDate : '';
+    }
+    const hayDatosNuevos = latestDrawDate > _sessionBaseDate;
+
+    // ── 4. Graduar y actualizar pesos (solo si hay datos nuevos) ──
     let avgGrades={freq:22,drought:22,cooc:22,count:0};
     if(hayDatosNuevos){
       const gradesP=gradeComponents(P,20);
       const gradesS=gradeComponents(S,20);
-      avgGrades={freq:(gradesP.freq+gradesS.freq)/2,drought:(gradesP.drought+gradesS.drought)/2,cooc:(gradesP.cooc+gradesS.cooc)/2,count:gradesP.count+gradesS.count};
+      avgGrades={
+        freq:   (gradesP.freq+gradesS.freq)/2,
+        drought:(gradesP.drought+gradesS.drought)/2,
+        cooc:   (gradesP.cooc+gradesS.cooc)/2,
+        count:  gradesP.count+gradesS.count
+      };
       _weights=adjustWeights(_weights,avgGrades);
       try{ localStorage.setItem('modelWeights',JSON.stringify(_weights)); }catch(e){}
       await saveWeightsToSupabase(_weights,avgGrades);
+
+      // Actualizar pesos de patrones nuevos
+      const newPatWeightsP=gradePatternComponents(P,20);
+      const newPatWeightsS=gradePatternComponents(S,20);
+      for(const k in _PATTERN_WEIGHTS_DEFAULT){
+        _patternWeights[k]=((newPatWeightsP[k]||0.20)+(newPatWeightsS[k]||0.20))/2;
+      }
+      try{ localStorage.setItem('patternWeights',JSON.stringify(_patternWeights)); }catch(e){}
+
+      // Actualizar la base de sesión para que nuevas cargas no re-entrenen innecesariamente
+      _sessionBaseDate = latestDrawDate;
     }
 
-    // 5. Computar estadísticas
+    // ── 5. Computar estadísticas ───────────────────────────────────
     showStatus('⚙ Calculando análisis y ajustando pesos del modelo…','loading');
     const DATA=computeAll(records);
 
-    // 6. Post-mortem y pesos
+    // ── 6. Post-mortem ────────────────────────────────────────────
     const postMortemHTML=buildPostMortemHTML(storedPred,records);
     const weightsHTML=buildWeightsHTML(_weights,avgGrades);
 
-    // 7. Guardar predicción en Supabase (siempre actualiza con pesos más recientes)
-    await savePredictionToSupabase(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario, _weights);
+    // ── 7. Guardar predicción con ultimo_sorteo POR TIPO ──────────
+    // Bug 1 fix: Principal usa latestP, Secundario usa latestS.
+    // savePredictionToSupabase ahora hace SELECT primero y solo inserta si
+    // no existe — nunca sobreescribe el combo histórico (Bug 2 fix).
+    await savePredictionToSupabase(latestP, {
+      ...DATA.predictions.Principal, _tipo_override:'Principal'
+    }, null, _weights);
+    await savePredictionToSupabase(latestS, null, {
+      ...DATA.predictions.Secundario, _tipo_override:'Secundario'
+    }, _weights);
 
-    // 8. Llenar resultados pendientes
+    // ── 8. Resultados pendientes ──────────────────────────────────
     let predHistory=await loadPredictionHistory();
     if(predHistory.length>0){
       await fillPredictionResults(predHistory,records);
       predHistory=await loadPredictionHistory();
     }
 
-    // 9. Render
+    // ── 9. Render ─────────────────────────────────────────────────
     renderAll(DATA,records,{postMortemHTML,weightsHTML,predHistory});
 
-    // 10. Guardar predicción actual en localStorage (AL FINAL para próximo post-mortem)
+    // ── 10. Guardar en localStorage AL FINAL ──────────────────────
     storePrediction(latestDrawDate, DATA.predictions.Principal, DATA.predictions.Secundario);
 
     const wf=(_weights.freq*100).toFixed(0),wd=(_weights.drought*100).toFixed(0),wc=(_weights.cooc*100).toFixed(0);
@@ -1710,9 +2061,10 @@ function renderAll(DATA, rawRecords, extra){
       ${buildPredCard('Secundario', predS, 'sec', 'sec', 'diff-sec')}
     </div>
     <div class="note" style="margin-top:8px;font-size:12.5px;">
-      <b>Metodología:</b> Los números azules son los 5 principales sugeridos (ordenados). El círculo naranja/rosa es el número diferente (1-16) sugerido.
-      Las bolas verdes/violetas = combo determinístico (top probabilidad). Las bolas balanceadas mezclan calientes y fríos para mayor cobertura.
-      La sequía se limita a ≤21 sorteos para evitar que números con racha larga dominen indefinidamente.
+      <b>Metodología v2:</b> Los números azules son los 5 principales sugeridos (ordenados). El círculo naranja/rosa es el número diferente (1-16) sugerido.
+      El modelo combina <b>75% criterios clásicos</b> (frecuencia ${((_weights.freq||0.35)*100).toFixed(0)}% + sequía ${((_weights.drought||0.40)*100).toFixed(0)}% + coocurrencia ${((_weights.cooc||0.25)*100).toFixed(0)}%) 
+      y <b>25% patrones aprendidos</b> (paridad · décadas · suma · consecutivos · gaps). 
+      Los pesos se auto-ajustan con cada sorteo ingresado basándose en qué criterio predijo mejor los últimos 20 sorteos.
       <b>Recordatorio:</b> Este es un modelo estadístico descriptivo — ningún sistema puede predecir un generador verdaderamente aleatorio.
     </div>`;
 
