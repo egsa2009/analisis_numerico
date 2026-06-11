@@ -655,11 +655,9 @@ try{
 }catch(e){}
 
 // ── MARCA DE SESIÓN para detectar datos nuevos correctamente ──────────────────
-// En vez de comparar contra localStorage (que se actualiza al final del mismo render),
-// guardamos la fecha conocida AL INICIO de cada sesión de página.
-// Así, si en esta misma sesión se ingresa un sorteo nuevo, la PRÓXIMA vez que se
-// ejecute loadAndRender (por Re-Analizar o Guardar) SÍ detectará el cambio.
 let _sessionBaseDate = null; // se fija la primera vez que se cargan datos
+let _forceSampling = false;  // cuando true, usa muestreo en vez de top-5 fijo
+let _forceRotationBlacklist = new Set(); // números que ya salieron en últimas N predicciones
 
 function initSupabase(url, key){
   if(!url||!key) return false;
@@ -1509,7 +1507,37 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
   for(let i=1;i<=16;i++) sd[i]=sd[i]/totD;
   const rm=Object.entries(nm).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
   const rd=Object.entries(sd).map(([k,v])=>[+k,v]).sort((a,b)=>b[1]-a[1]);
-  const comA=rm.slice(0,5).map(x=>x[0]).sort((a,b)=>a-b);
+
+  // ── Selección del combo determinístico ───────────────────────────
+  // Modo normal: top-5 por score (determinístico)
+  // Modo forzado (_forceSampling): muestreo ponderado del top-20 con blacklist
+  //   → garantiza números distintos a la predicción anterior
+  let comA;
+  if(_forceSampling){
+    // Excluir números en blacklist (predichos repetidamente sin acertar)
+    const candidatesForced = rm.filter(([n]) => !_forceRotationBlacklist.has(n));
+    // Si al excluir quedan menos de 10, usar todos
+    const pool = candidatesForced.length >= 10 ? candidatesForced : rm;
+    // Tomar top-20 y hacer muestreo ponderado para elegir 5
+    const top20 = pool.slice(0, 20);
+    const top20N = top20.map(x=>x[0]);
+    const top20W = top20.map(x=>x[1]);
+    comA = weightedSample(top20N, [...top20W], 5).sort((a,b)=>a-b);
+    // Apagar el flag después de usarlo — próxima carga normal vuelve a determinístico
+    _forceSampling = false;
+  } else {
+    comA = rm.slice(0,5).map(x=>x[0]).sort((a,b)=>a-b);
+  }
+
+  // Actualizar blacklist con los números del combo actual para rotación futura
+  // (máx 10 en blacklist para no sobre-restringir)
+  comA.forEach(n => _forceRotationBlacklist.add(n));
+  if(_forceRotationBlacklist.size > 10){
+    // Eliminar los más antiguos manteniendo solo los últimos 10
+    const arr = [..._forceRotationBlacklist];
+    _forceRotationBlacklist = new Set(arr.slice(arr.length - 10));
+  }
+
   const diffA=rd[0][0];
   // Balanced combo — exclude deterministic numbers to guarantee genuine diversity
   const comASet=new Set(comA);
@@ -1643,6 +1671,18 @@ async function forceNewPrediction(){
     try{ localStorage.removeItem('patternWeights'); }catch(e){}
     if(_sb){ try{ await _sb.from('modelo_pesos').delete().eq('id',1); }catch(e){} }
     try{ localStorage.removeItem('lastPostMortem'); }catch(e){}
+    // Construir blacklist con los números que están mostrando actualmente
+    // para garantizar que Forzar genere números distintos
+    try{
+      const sp = loadStoredPrediction();
+      if(sp){
+        if(sp.Principal && sp.Principal.nums) sp.Principal.nums.forEach(n=>_forceRotationBlacklist.add(n));
+        if(sp.Secundario && sp.Secundario.nums) sp.Secundario.nums.forEach(n=>_forceRotationBlacklist.add(n));
+      }
+    }catch(e){}
+
+    // Activar modo sampling para que el próximo computePredictions use muestreo ponderado
+    _forceSampling = true;
     // Marcar que los pesos remotos ya fueron borrados y resetear la base de sesión
     window._forceReset = true;
     _sessionBaseDate = ''; // forzar re-entrenamiento completo
@@ -1717,6 +1757,9 @@ async function loadAndRender(){
       }
       try{ localStorage.setItem('patternWeights',JSON.stringify(_patternWeights)); }catch(e){}
 
+      // Activar sampling para que la predicción post-entrenamiento use muestreo
+      // (evita que siempre salgan los mismos 5 números aunque los pesos cambien poco)
+      _forceSampling = true;
       // Actualizar la base de sesión para que nuevas cargas no re-entrenen innecesariamente
       _sessionBaseDate = latestDrawDate;
     }
