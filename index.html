@@ -272,6 +272,10 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:14px;align-items:center;">
     <button type="submit" id="btnGuardar" class="btn-primary">&#128190; Guardar Sorteo</button>
     <button type="button" id="btnReanalizar" class="btn-primary" style="background:var(--accent2);color:#0b0d12">&#128260; Re-Analizar (recargar BD)</button>
+    <button type="button" id="btnForzarPrediccion" class="btn-primary" style="background:#7c3aed;color:#fff">&#9889; Forzar Nueva Prediccion</button>
+  </div>
+  <div id="forzarNote" style="display:none;margin-top:8px;font-size:12px;color:#a78bfa;background:#1a1030;border:1px solid #4c1d95;padding:8px 14px;border-radius:6px;">
+    &#9889; Limpiando memoria y pesos del modelo… la predicción se regenerará desde cero.
   </div>
 </form>
 
@@ -1649,6 +1653,7 @@ async function loadAndRender(){
   showStatus('⏳ Cargando datos desde Supabase…','loading');
   document.getElementById('btnGuardar').disabled=true;
   document.getElementById('btnReanalizar').disabled=true;
+  const _btnFP=document.getElementById('btnForzarPrediccion'); if(_btnFP) _btnFP.disabled=true;
   try{
     const records=await fetchAllRecords();
     if(records.length===0){ showStatus('⚠ No hay registros en Supabase aún. Ingresa el primer sorteo.','error'); return; }
@@ -1752,6 +1757,8 @@ async function loadAndRender(){
   }finally{
     document.getElementById('btnGuardar').disabled=false;
     document.getElementById('btnReanalizar').disabled=false;
+    const _btnFP2=document.getElementById('btnForzarPrediccion');
+    if(_btnFP2) _btnFP2.disabled=false;
   }
 }
 
@@ -2097,9 +2104,12 @@ document.addEventListener('DOMContentLoaded',()=>{
   // Prefill config fields from localStorage
   document.getElementById('cfgUrl').value=_sbUrl;
   document.getElementById('cfgKey').value=_sbKey;
-  document.getElementById('btnReanalizar').addEventListener('click',loadAndRender);
-  document.getElementById('btnForzarPrediccion').addEventListener('click',forceNewPrediction);
-  document.getElementById('sorteoForm').addEventListener('submit',handleFormSubmit);
+  const _btnR=document.getElementById('btnReanalizar');
+  if(_btnR) _btnR.addEventListener('click',loadAndRender);
+  const _btnF=document.getElementById('btnForzarPrediccion');
+  if(_btnF) _btnF.addEventListener('click',forceNewPrediction);
+  const _form=document.getElementById('sorteoForm');
+  if(_form) _form.addEventListener('submit',handleFormSubmit);
   // Init Supabase if credentials already saved
   if(_sbUrl && _sbKey){
     if(initSupabase(_sbUrl,_sbKey)){
