@@ -656,7 +656,7 @@ try{
 
 // ── MARCA DE SESIÓN para detectar datos nuevos correctamente ──────────────────
 let _sessionBaseDate = null; // se fija la primera vez que se cargan datos
-let _forceSampling = false;  // cuando true, usa muestreo en vez de top-5 fijo
+let _forceSampling = 0;  // contador: 2=ambos tipos, se decrementa en cada llamada
 let _forceRotationBlacklist = new Set(); // números que ya salieron en últimas N predicciones
 
 function initSupabase(url, key){
@@ -1513,7 +1513,8 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
   // Modo forzado (_forceSampling): muestreo ponderado del top-20 con blacklist
   //   → garantiza números distintos a la predicción anterior
   let comA;
-  if(_forceSampling){
+  if(_forceSampling > 0){
+    _forceSampling = Math.max(0, _forceSampling - 1); // decrementar: cada tipo consume 1
     // Excluir números en blacklist (predichos repetidamente sin acertar)
     const candidatesForced = rm.filter(([n]) => !_forceRotationBlacklist.has(n));
     // Si al excluir quedan menos de 10, usar todos
@@ -1523,8 +1524,6 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
     const top20N = top20.map(x=>x[0]);
     const top20W = top20.map(x=>x[1]);
     comA = weightedSample(top20N, [...top20W], 5).sort((a,b)=>a-b);
-    // Apagar el flag después de usarlo — próxima carga normal vuelve a determinístico
-    _forceSampling = false;
   } else {
     comA = rm.slice(0,5).map(x=>x[0]).sort((a,b)=>a-b);
   }
@@ -1682,7 +1681,7 @@ async function forceNewPrediction(){
     }catch(e){}
 
     // Activar modo sampling para que el próximo computePredictions use muestreo ponderado
-    _forceSampling = true;
+    _forceSampling = 2; // 2 tipos: Principal y Secundario
     // Marcar que los pesos remotos ya fueron borrados y resetear la base de sesión
     window._forceReset = true;
     _sessionBaseDate = ''; // forzar re-entrenamiento completo
@@ -1759,7 +1758,7 @@ async function loadAndRender(){
 
       // Activar sampling para que la predicción post-entrenamiento use muestreo
       // (evita que siempre salgan los mismos 5 números aunque los pesos cambien poco)
-      _forceSampling = true;
+      _forceSampling = 2; // 2 tipos: Principal y Secundario
       // Actualizar la base de sesión para que nuevas cargas no re-entrenen innecesariamente
       _sessionBaseDate = latestDrawDate;
     }
