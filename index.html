@@ -1608,15 +1608,20 @@ async function saveWeightsToSupabase(weights, grades){
       g_cooc:  grades&&grades.count>0?+grades.cooc.toFixed(4):null,
       actualizado_en:new Date().toISOString()
     };
-    await _sb.from('modelo_pesos').upsert(row,{onConflict:'id'});
-  }catch(e){ console.warn('saveWeights (tabla opcional):',e.message); }
+    const {error}=await _sb.from('modelo_pesos').upsert(row,{onConflict:'id'});
+    // Si la tabla no existe (PGRST205) simplemente ignorar — es opcional
+    if(error&&!error.message.includes('PGRST205')&&!error.code?.includes('42P01'))
+      console.info('saveWeights (tabla opcional):', error.message);
+  }catch(e){ /* tabla opcional, ignorar */ }
 }
 
 async function loadWeightsFromSupabase(){
   if(!_sb) return null;
   try{
-    const {data,error}=await _sb.from('modelo_pesos').select('*').eq('id',1).single();
-    if(error||!data) return null;
+    const {data,error}=await _sb.from('modelo_pesos').select('*').eq('id',1).maybeSingle();
+    // maybeSingle() retorna null sin error si no existe la fila o la tabla
+    if(error){ console.info('modelo_pesos (opcional):', error.message); return null; }
+    if(!data) return null;
     return {freq:data.w_freq, drought:data.w_sequia, cooc:data.w_cooc};
   }catch(e){ return null; }
 }
