@@ -189,7 +189,7 @@ footer { margin:60px 0 20px; color:var(--muted); font-size:12.5px; text-align:ce
 <!-- ===== PREDICCIÓN DESTACADA ===== -->
 <section id="prediccion" style="margin:0 0 40px 0; scroll-margin-top:20px;">
   <h2 style="color:#4ade80;border-left-color:#4ade80;">&#127919; Predicción — Próximo Sorteo</h2>
-  <p class="lead">Modelo probabilístico con <b>pesos auto-ajustados</b> cada vez que ingresas resultados reales. Aprende qué criterio (frecuencia, sequía o coocurrencia) predijo mejor los últimos 20 sorteos.</p>
+  <p class="lead">Modelo probabilístico con <b>pesos auto-ajustados</b> cada vez que ingresas resultados reales. Combina criterios clásicos (frecuencia, sequía, coocurrencia) con patrones avanzados: <b>repetición inmediata, vecinos, tendencia de suma y alternancia alta/baja</b>. Aprende de los últimos 20 sorteos.</p>
   <div id="predHeroContent">
     <p class="pred-placeholder">&#9203; Configura Supabase y carga los datos para ver la predicción...</p>
   </div>
@@ -647,11 +647,14 @@ try{
 }catch(e){}
 
 // Pesos para los 5 nuevos criterios de patrones
-const _PATTERN_WEIGHTS_DEFAULT = {parity:0.20, decades:0.20, sumRange:0.20, consecutive:0.20, gaps:0.20};
+const _PATTERN_WEIGHTS_DEFAULT = {parity:0.10, decades:0.10, sumRange:0.15, consecutive:0.10, gaps:0.15, repeat:0.20, neighbor:0.10, alternance:0.10};
 let _patternWeights = {..._PATTERN_WEIGHTS_DEFAULT};
 try{
   const pw = JSON.parse(localStorage.getItem('patternWeights')||'null');
-  if(pw && typeof pw.parity==='number') _patternWeights = pw;
+  if(pw && typeof pw.parity==='number'){
+    // Mezclar con defaults para que los nuevos criterios (repeat, neighbor, alternance) tengan valor inicial
+    _patternWeights = {..._PATTERN_WEIGHTS_DEFAULT, ...pw};
+  }
 }catch(e){}
 
 // ── MARCA DE SESIÓN para detectar datos nuevos correctamente ──────────────────
@@ -1037,20 +1040,21 @@ function computeComponentScores(draws){
 // PATTERN ANALYSIS ENGINE (5 nuevos criterios)
 // ============================================================
 function computePatternSignals(draws, windowN=20){
-  // Analiza los últimos windowN sorteos para extraer señales de patrones
   if(!draws||draws.length<5) return null;
   const recent=draws.slice(-windowN);
   const n=recent.length;
+  const last=draws[draws.length-1];       // sorteo más reciente
+  const prev=draws.length>=2?draws[draws.length-2]:null; // sorteo anterior
 
-  // 1. PARIDAD: distribución pares/impares en los últimos sorteos
-  const parityDist=[0,0,0,0,0,0]; // índice = cantidad de pares (0-5)
+  // 1. PARIDAD
+  const parityDist=[0,0,0,0,0,0];
   for(const r of recent){
     const nums=[r.n1,r.n2,r.n3,r.n4,r.n5];
     parityDist[nums.filter(x=>x%2===0).length]++;
   }
-  const expectedParityIdx=parityDist.indexOf(Math.max(...parityDist)); // patrón más frecuente
+  const expectedParityIdx=parityDist.indexOf(Math.max(...parityDist));
 
-  // 2. DECENAS: qué rangos han aparecido más
+  // 2. DÉCADAS
   const decadeFreq={'D1':0,'D2':0,'D3':0,'D4':0,'D5':0};
   for(const r of recent){
     [r.n1,r.n2,r.n3,r.n4,r.n5].forEach(n=>{
@@ -1062,14 +1066,28 @@ function computePatternSignals(draws, windowN=20){
     });
   }
 
-  // 3. SUMA: rango de suma más frecuente en los últimos sorteos
+  // 3. SUMA: tendencia (bajando/subiendo) + rango esperado
   const sums=recent.map(r=>r.n1+r.n2+r.n3+r.n4+r.n5);
   const sumMean=sums.reduce((a,b)=>a+b,0)/n;
   const sumStd=Math.sqrt(sums.reduce((a,b)=>a+(b-sumMean)**2,0)/n)||1;
-  const sumLow=sumMean-sumStd, sumHigh=sumMean+sumStd;
+  // Tendencia de suma: comparar últimas 3 vs anteriores 3
+  let sumTrend=0; // -1=bajando, 0=estable, +1=subiendo
+  if(sums.length>=6){
+    const recAvg=sums.slice(-3).reduce((a,b)=>a+b,0)/3;
+    const prevAvg=sums.slice(-6,-3).reduce((a,b)=>a+b,0)/3;
+    if(recAvg - prevAvg > 10) sumTrend=1;
+    else if(prevAvg - recAvg > 10) sumTrend=-1;
+  }
+  // Rango esperado AJUSTADO según tendencia
+  const sumLow = sumTrend<0 ? sumMean-sumStd*1.5 : sumMean-sumStd;
+  const sumHigh= sumTrend>0 ? sumMean+sumStd*1.5 : sumMean+sumStd;
+  // Suma objetivo para el próximo (si tendencia clara, proyectar)
+  const sumTarget = sumTrend!==0 && sums.length>=2
+    ? sums[sums.length-1] + sumTrend*(Math.abs(sums[sums.length-1]-sums[sums.length-2])*0.5)
+    : sumMean;
 
-  // 4. CONSECUTIVOS: frecuencia de números consecutivos en los sorteos recientes
-  const consec=[]; // cuántos pares consecutivos hubo en cada sorteo
+  // 4. CONSECUTIVOS
+  const consec=[];
   for(const r of recent){
     const nums=[r.n1,r.n2,r.n3,r.n4,r.n5].sort((a,b)=>a-b);
     let c=0;for(let i=0;i<4;i++) if(nums[i+1]-nums[i]===1)c++;
@@ -1077,27 +1095,75 @@ function computePatternSignals(draws, windowN=20){
   }
   const avgConsec=consec.reduce((a,b)=>a+b,0)/n;
 
-  // 5. GAPS: números con gap actual > gap_medio histórico (candidatos a "volver")
+  // 5. GAPS
   const gapScores={};
   for(let i=1;i<=43;i++){
-    let drought=0,lastSeen=-1;
+    let lastSeen=-1;
     for(let j=0;j<draws.length;j++){
-      if([draws[j].n1,draws[j].n2,draws[j].n3,draws[j].n4,draws[j].n5].includes(i)){lastSeen=j;}
+      if([draws[j].n1,draws[j].n2,draws[j].n3,draws[j].n4,draws[j].n5].includes(i)) lastSeen=j;
     }
-    drought=lastSeen>=0?draws.length-1-lastSeen:draws.length;
-    // Gap histórico medio
-    const gaps=[];let prev=-1;
+    const drought=lastSeen>=0?draws.length-1-lastSeen:draws.length;
+    const gaps=[];let pv=-1;
     for(let j=0;j<draws.length;j++){
       if([draws[j].n1,draws[j].n2,draws[j].n3,draws[j].n4,draws[j].n5].includes(i)){
-        if(prev>=0)gaps.push(j-prev);prev=j;
+        if(pv>=0)gaps.push(j-pv);pv=j;
       }
     }
     const meanGap=gaps.length>0?gaps.reduce((a,b)=>a+b,0)/gaps.length:(43/5);
-    // Score: cuánto más lleva sin salir vs su promedio (normalizado)
     gapScores[i]=Math.min(2.0, drought/Math.max(meanGap,1));
   }
 
-  return {parityDist,expectedParityIdx,decadeFreq,sumMean,sumStd,sumLow,sumHigh,avgConsec,gapScores};
+  // 6. REPETICIÓN INMEDIATA: números que salieron en los últimos 2 sorteos
+  // Empíricamente ~1-2 números se repiten entre sorteos consecutivos en Baloto
+  const lastNums=last?[last.n1,last.n2,last.n3,last.n4,last.n5]:[];
+  const prevNums=prev?[prev.n1,prev.n2,prev.n3,prev.n4,prev.n5]:[];
+  // Medir qué tan frecuente es la repetición en la historia reciente
+  let repCount=0;
+  for(let i=1;i<recent.length;i++){
+    const a=new Set([recent[i-1].n1,recent[i-1].n2,recent[i-1].n3,recent[i-1].n4,recent[i-1].n5]);
+    const b=[recent[i].n1,recent[i].n2,recent[i].n3,recent[i].n4,recent[i].n5];
+    repCount+=b.filter(x=>a.has(x)).length;
+  }
+  const avgRep=recent.length>1?repCount/(recent.length-1):0; // promedio de repeticiones por sorteo
+
+  // 7. VECINOS: números adyacentes (+/-1, +/-2) a los del último sorteo
+  // Si en la historia reciente los vecinos del sorteo anterior aparecen frecuentemente
+  const neighborBonus={};
+  for(let i=1;i<=43;i++) neighborBonus[i]=0;
+  // Contar cuántas veces un vecino del sorteo t-1 apareció en el sorteo t
+  for(let i=1;i<recent.length;i++){
+    const prev2=[recent[i-1].n1,recent[i-1].n2,recent[i-1].n3,recent[i-1].n4,recent[i-1].n5];
+    const curr=[recent[i].n1,recent[i].n2,recent[i].n3,recent[i].n4,recent[i].n5];
+    for(const cn of curr){
+      for(const pn of prev2){
+        const dist=Math.abs(cn-pn);
+        if(dist===1||dist===2) neighborBonus[cn]++;
+      }
+    }
+  }
+  // Normalizar neighborBonus
+  const maxNB=Math.max(...Object.values(neighborBonus),1);
+  for(let i=1;i<=43;i++) neighborBonus[i]=neighborBonus[i]/maxNB;
+
+  // 8. ALTERNANCIA ALTA/BAJA: si el último tuvo muchos números altos (>22), predecir más bajos y viceversa
+  const lastHighCount=lastNums.filter(x=>x>22).length;
+  const recentHighAvg=recent.reduce((s,r)=>{
+    return s+[r.n1,r.n2,r.n3,r.n4,r.n5].filter(x=>x>22).length;
+  },0)/n;
+  // Si el último sorteo tuvo más altos que la media → próximo podría tener más bajos
+  const altBiasLow = lastHighCount > recentHighAvg + 0.5; // true=favorecer números bajos
+  const altBiasHigh= lastHighCount < recentHighAvg - 0.5; // true=favorecer números altos
+
+  return {
+    parityDist, expectedParityIdx,
+    decadeFreq,
+    sumMean, sumStd, sumLow, sumHigh, sumTarget, sumTrend,
+    avgConsec,
+    gapScores,
+    lastNums, prevNums, avgRep,
+    neighborBonus,
+    altBiasLow, altBiasHigh, lastHighCount, recentHighAvg
+  };
 }
 
 // Calcula un score de patrón para cada número basado en los 5 criterios
@@ -1152,7 +1218,7 @@ function gradePatternComponents(draws, lastN=20){
   if(!signals) return _PATTERN_WEIGHTS_DEFAULT;
 
   // Para cada sorteo del test, ver qué criterio "predijo" mejor (score más alto para los actuales vs no actuales)
-  const hits={parity:0,decades:0,sumRange:0,consecutive:0,gaps:0};
+  const hits={parity:0,decades:0,sumRange:0,consecutive:0,gaps:0,repeat:0,neighbor:0,alternance:0};
   const total=testDraws.length;
   for(const draw of testDraws){
     const actual=[draw.n1,draw.n2,draw.n3,draw.n4,draw.n5];
@@ -1186,24 +1252,47 @@ function gradePatternComponents(draws, lastN=20){
 }
 
 function patternSignals_decomposed(num, signals){
-  // Retorna scores individuales por criterio (para análisis)
+  if(!signals) return {parity:0.5,decades:0.5,sumRange:0.5,consecutive:0.5,gaps:0.5,repeat:0.5,neighbor:0.5,alternance:0.5};
+
+  // 1. Paridad
   const isEven=num%2===0;
-  const evenExpected=signals.expectedParityIdx;
+  const evenExpected=signals.expectedParityIdx||2;
   const parity=isEven&&evenExpected>2?1.2:!isEven&&evenExpected<3?1.2:0.5;
 
+  // 2. Décadas
   const decade=num<=10?'D1':num<=20?'D2':num<=30?'D3':num<=40?'D4':'D5';
-  const avgDF=Object.values(signals.decadeFreq).reduce((a,b)=>a+b,0)/5;
-  const decades=(signals.decadeFreq[decade]/Math.max(avgDF,1))<0.9?1.2:0.6;
+  const avgDF=Object.values(signals.decadeFreq||{D1:20,D2:20,D3:20,D4:20,D5:20}).reduce((a,b)=>a+b,0)/5;
+  const decades=(signals.decadeFreq&&signals.decadeFreq[decade]||0)/Math.max(avgDF,1)<0.9?1.2:0.6;
 
-  const estimatedContrib=num; // contribución directa
-  const inRange=estimatedContrib>=(signals.sumLow/5)&&estimatedContrib<=(signals.sumHigh/5)?1.2:0.6;
+  // 3. Suma-Rango: usa sumTarget si hay tendencia, si no usa rango
+  const contribExpected=(signals.sumTarget||signals.sumMean||110)/5;
+  const inRange=Math.abs(num-contribExpected)<8?1.2:Math.abs(num-contribExpected)<15?0.8:0.4;
 
-  const gs=signals.gapScores[num]||1.0;
+  // 4. Consecutivos (neutral sin contexto)
+  const consecutive=0.7;
+
+  // 5. Gaps
+  const gs=(signals.gapScores&&signals.gapScores[num])||1.0;
   const gaps=Math.min(2.0,gs)*0.8;
 
-  const consecutive=0.7; // neutral sin contexto del combo actual
+  // 6. Repetición inmediata: bonus si salió en los últimos 2 sorteos Y la tasa de repetición es alta
+  const wasLast=(signals.lastNums||[]).includes(num);
+  const wasPrev=(signals.prevNums||[]).includes(num);
+  const repRate=signals.avgRep||0;
+  const repeat=wasLast&&repRate>0.8?1.3:wasPrev&&repRate>1.0?1.1:wasLast?0.9:0.5;
 
-  return {parity,decades,sumRange:inRange,consecutive,gaps};
+  // 7. Vecinos: bonus si número es vecino de los del último sorteo y patrón vecino es frecuente
+  const nb=(signals.neighborBonus&&signals.neighborBonus[num])||0;
+  const neighbor=0.4+nb*0.9; // rango 0.4-1.3
+
+  // 8. Alternancia alta/baja
+  let alternance=0.7;
+  if(signals.altBiasLow && num<=22) alternance=1.2;
+  else if(signals.altBiasHigh && num>22) alternance=1.2;
+  else if(signals.altBiasLow && num>22) alternance=0.3;
+  else if(signals.altBiasHigh && num<=22) alternance=0.3;
+
+  return {parity,decades,sumRange:inRange,consecutive,gaps,repeat,neighbor,alternance};
 }
 
 // Grade how well each component ranked actual drawn numbers
@@ -1350,6 +1439,36 @@ function buildPostMortemHTML(stored, allDraws){
       if(lowGapNums.length>0) gapInsight+=`<span style="color:#f87171">Recién vistos: ${lowGapNums.map(n=>`#${n}`).join(', ')}</span>`;
     }
 
+    // ── Repetición inmediata
+    let repeatInsight='';
+    if(prevDraws.length>=1){
+      const sortAnterior=prevDraws[prevDraws.length-1];
+      const numerosAnteriores=[sortAnterior.n1,sortAnterior.n2,sortAnterior.n3,sortAnterior.n4,sortAnterior.n5];
+      const repetidos=actualNums.filter(n=>numerosAnteriores.includes(n));
+      if(repetidos.length>0)
+        repeatInsight=`<span style="color:var(--muted)">Repetición:</span> <span style="color:#f59e0b"><b>${repetidos.map(n=>'#'+n).join(', ')}</b> repitieron del sorteo anterior</span>`;
+      else
+        repeatInsight=`<span style="color:var(--muted)">Repetición:</span> <span style="color:#6b7280">Ningún número repitió del sorteo anterior</span>`;
+    }
+
+    // ── Tendencia de suma
+    let trendInsight='';
+    if(prevSignals&&prevSignals.sumTrend!==0){
+      const dir=prevSignals.sumTrend>0?'↑ subiendo':'↓ bajando';
+      const acierto=prevSignals.sumTrend>0?(suma>prevSignals.sumMean):(suma<prevSignals.sumMean);
+      trendInsight=`<span style="color:var(--muted)">Tendencia suma:</span> El modelo predijo <b>${dir}</b> → suma real <b>${suma}</b> <span style="color:${acierto?'#4ade80':'#f87171'}">${acierto?'✓ confirmó':'✗ no confirmó'}</span>`;
+    }
+
+    // ── Vecinos del sorteo anterior
+    let neighborInsight='';
+    if(prevDraws.length>=1){
+      const sortAnterior2=prevDraws[prevDraws.length-1];
+      const numerosAnt2=[sortAnterior2.n1,sortAnterior2.n2,sortAnterior2.n3,sortAnterior2.n4,sortAnterior2.n5];
+      const vecinos=actualNums.filter(n=>numerosAnt2.some(p=>Math.abs(n-p)<=2&&n!==p));
+      if(vecinos.length>0)
+        neighborInsight=`<span style="color:var(--muted)">Vecinos (±2):</span> <span style="color:#10b981"><b>${vecinos.map(n=>'#'+n).join(', ')}</b> estaban a ≤2 posiciones de números del sorteo anterior</span>`;
+    }
+
     html+=`<div class="postmortem-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <span style="color:${titleColor};font-weight:700;font-size:12.5px">🎯 ${tipo} · ${actual.fecha}</span>
@@ -1371,6 +1490,9 @@ function buildPostMortemHTML(stored, allDraws){
           <div style="grid-column:1/-1"><span style="color:var(--muted)">Décadas:</span> <b>${decStr}</b></div>
           <div><span style="color:var(--muted)">Consecutivos:</span> <b>${consecStr}</b></div>
           <div>${gapInsight||'<span style="color:var(--muted)">Gaps: sin datos previos</span>'}</div>
+          ${repeatInsight ? `<div style="grid-column:1/-1">${repeatInsight}</div>` : ''}
+          ${trendInsight ? `<div style="grid-column:1/-1">${trendInsight}</div>` : ''}
+          ${neighborInsight ? `<div style="grid-column:1/-1">${neighborInsight}</div>` : ''}
         </div>
       </div>`;
     if(surprises.length>0){
@@ -1416,8 +1538,8 @@ function buildWeightsHTML(weights, grades){
       <span style="color:#6b7280">Valores positivos = el componente apuntó hacia los números que salieron</span>
     </div>`;
   }
-  const patLabels={parity:'Paridad',decades:'Décadas',sumRange:'Suma-Rango',consecutive:'Consecutivos',gaps:'Gaps'};
-  const patColors={parity:'#c084fc',decades:'#f472b6',sumRange:'#fb923c',consecutive:'#34d399',gaps:'#60a5fa'};
+  const patLabels={parity:'Paridad',decades:'Décadas',sumRange:'Suma-Tendencia',consecutive:'Consecutivos',gaps:'Gaps',repeat:'Repetición',neighbor:'Vecinos',alternance:'Alternancia'};
+  const patColors={parity:'#c084fc',decades:'#f472b6',sumRange:'#fb923c',consecutive:'#34d399',gaps:'#60a5fa',repeat:'#f59e0b',neighbor:'#10b981',alternance:'#e879f9'};
   function patRow(label,key,color){
     const pct=((_patternWeights[key]||0.20)*100).toFixed(1);
     const def=((_PATTERN_WEIGHTS_DEFAULT[key]||0.20)*100).toFixed(1);
@@ -1433,7 +1555,7 @@ function buildWeightsHTML(weights, grades){
   const patSection=`<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
     <div style="font-size:11px;color:#a78bfa;font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">📐 Pesos — 5 Criterios de Patrones (25% del modelo)</div>
     ${Object.keys(_PATTERN_WEIGHTS_DEFAULT).map(k=>patRow(patLabels[k],k,patColors[k])).join('')}
-    <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (20% c/u) · Aprende de los últimos 20 sorteos</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">8 criterios · Δ vs. pesos iniciales · Aprende de los últimos 20 sorteos</div>
   </div>`;
   return `${row('Frecuencia','freq','#3ea6ff')}${row('Sequía','drought','#4ade80')}${row('Coocurrencia','cooc','#ffb53e')}
   <div style="font-size:11px;color:var(--muted);margin-top:6px">Δ vs. pesos iniciales (35/40/25) · Modelo clásico (75% del score total)</div>${perf}${patSection}`;
@@ -1453,11 +1575,14 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
   let minPat=Infinity,maxPat=-Infinity;
   for(let i=1;i<=43;i++){
     const ps=patternSignals_decomposed(i,patSignals||{expectedParityIdx:2,decadeFreq:{D1:20,D2:20,D3:20,D4:20,D5:20},sumLow:90,sumHigh:130,avgConsec:0.5,gapScores:{}});
-    rawPatScores[i]=(_patternWeights.parity||0.20)*ps.parity
-      +(_patternWeights.decades||0.20)*ps.decades
-      +(_patternWeights.sumRange||0.20)*ps.sumRange
-      +(_patternWeights.consecutive||0.20)*ps.consecutive
-      +(_patternWeights.gaps||0.20)*ps.gaps;
+    rawPatScores[i]=(_patternWeights.parity||0.10)*ps.parity
+      +(_patternWeights.decades||0.10)*ps.decades
+      +(_patternWeights.sumRange||0.15)*ps.sumRange
+      +(_patternWeights.consecutive||0.10)*ps.consecutive
+      +(_patternWeights.gaps||0.15)*ps.gaps
+      +(_patternWeights.repeat||0.20)*ps.repeat
+      +(_patternWeights.neighbor||0.10)*ps.neighbor
+      +(_patternWeights.alternance||0.10)*ps.alternance;
     if(rawPatScores[i]<minPat) minPat=rawPatScores[i];
     if(rawPatScores[i]>maxPat) maxPat=rawPatScores[i];
   }
@@ -1476,9 +1601,9 @@ function computePredictions(freq,patterns,pairs,penaltyNums=new Set(),draws=[]){
     ps=Math.min(1,ps/(5*(freq.top10_main[0]?freq.top10_main[0][1]:1)+1));
     // Score normalizado de patrones (0-1)
     const patScore=(rawPatScores[i]-minPat)/patRange;
-    // Mezcla: 75% modelo clásico + 25% patrones nuevos
+    // Mezcla: 65% modelo clásico + 35% patrones (aumentamos peso de patrones con los nuevos criterios)
     const classicScore=_weights.freq*fs+_weights.drought*ds+_weights.cooc*ps;
-    const blendedScore=0.75*classicScore+0.25*patScore;
+    const blendedScore=0.65*classicScore+0.35*patScore;
     const penalty=penaltyNums.has(i)?0.80:1.0;
     sm[i]=blendedScore*penalty;
   }
