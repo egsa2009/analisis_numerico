@@ -1,0 +1,134 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider  = "postgresql"
+    url       = env("DATABASE_URL")
+    directUrl = env("DIRECT_URL")
+}
+
+// ============================================================
+// Sorteos históricos (series temporales)
+// ============================================================
+model Sorteo {
+  id        BigInt   @id @default(autoincrement())
+  fecha     DateTime @db.Date
+  tipo      String // 'Principal' | 'Secundario'
+  n1        Int
+  n2        Int
+  n3        Int
+  n4        Int
+  n5        Int
+  diff      Int
+  createdAt DateTime @default(now())
+
+  @@unique([fecha, tipo], name: "uq_fecha_tipo")
+  @@index([tipo, fecha(sort: Desc)])
+  @@index([fecha(sort: Desc)])
+  @@map("sorteos")
+}
+
+// ============================================================
+// Predicciones generadas por el motor
+// ============================================================
+model Prediccion {
+  id            BigInt   @id @default(autoincrement())
+  tipo          String
+  generadaEn    DateTime @default(now())
+  ultimoSorteo  DateTime @db.Date
+
+  // Combo recomendado (ensemble)
+  numeros       Int[] // 5 números principales
+  diffNum       Int
+
+  // Metadatos del modelo
+  modeloLider   String // modelo con mayor peso al generar
+  confianza     Float // 0-100
+  pesos         Json // pesos por modelo en el momento
+  scoresPorModelo Json // top predicciones por cada modelo
+  explicacion   String   @db.Text
+
+  // Resultado real (relleno cuando llega el sorteo)
+  resultadoFecha DateTime? @db.Date
+  reales         Int[]
+  rDiff          Int?
+  aciertos       Int?
+  diffAcertado   Boolean?
+  evaluada       Boolean  @default(false)
+
+  createdAt     DateTime @default(now())
+
+  @@index([tipo, generadaEn(sort: Desc)])
+  @@index([evaluada])
+  @@map("predicciones")
+}
+
+// ============================================================
+// Rendimiento histórico de cada modelo (backtesting)
+// ============================================================
+model ModeloPerformance {
+  id             BigInt   @id @default(autoincrement())
+  tipo           String
+  modelo         String
+  evaluadoEn     DateTime @default(now())
+  mae            Float // error absoluto medio (rank de aciertos)
+  rmse           Float
+  precisionMedia Float // aciertos promedio (0-5)
+  hitRate        Float // % de números acertados
+  muestras       Int // nº de sorteos evaluados (walk-forward)
+  peso           Float // peso adaptativo asignado
+  params         Json // hiperparámetros usados
+
+  @@index([tipo, modelo, evaluadoEn(sort: Desc)])
+  @@map("modelos_performance")
+}
+
+// ============================================================
+// Configuración dinámica de parámetros de cada modelo
+// ============================================================
+model ParametrosModelo {
+  id        BigInt   @id @default(autoincrement())
+  tipo      String
+  modelo    String
+  params    Json
+  activo    Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([tipo, modelo], name: "uq_tipo_modelo")
+  @@map("parametros_modelos")
+}
+
+// ============================================================
+// Log transparente de decisiones del auto-aprendizaje
+// ============================================================
+model LogAprendizaje {
+  id        BigInt   @id @default(autoincrement())
+  tipo      String
+  evento    String // 'entrenamiento' | 'ajuste_pesos' | 'cambio_regimen' | 'evaluacion' | 'prediccion'
+  titulo    String
+  detalle   String   @db.Text
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([tipo, createdAt(sort: Desc)])
+  @@map("logs_aprendizaje")
+}
+
+// ============================================================
+// Resultados de validación cruzada temporal (walk-forward)
+// ============================================================
+model ResultadoValidacion {
+  id          BigInt   @id @default(autoincrement())
+  tipo        String
+  modelo      String
+  fechaSorteo DateTime @db.Date
+  predichos   Int[]
+  reales      Int[]
+  aciertos    Int
+  createdAt   DateTime @default(now())
+
+  @@index([tipo, modelo, fechaSorteo(sort: Desc)])
+  @@map("resultados_validacion")
+}
