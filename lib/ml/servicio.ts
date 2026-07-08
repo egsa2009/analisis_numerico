@@ -18,13 +18,10 @@ import {
   TipoSorteo,
 } from './tipos'
 
-const PASOS_BACKTEST = 30 // sorteos usados en walk-forward
+const PASOS_BACKTEST = 30
 
 export async function getHistorial(tipo: TipoSorteo): Promise<SorteoLite[]> {
-  const filas = await prisma.sorteo.findMany({
-    where: { tipo },
-    orderBy: { fecha: 'asc' },
-  })
+  const filas = await prisma.sorteo.findMany({ where: { tipo }, orderBy: { fecha: 'asc' } })
   return (filas ?? []).map((s) => ({
     fecha: fechaISO(s.fecha),
     n: [s.n1, s.n2, s.n3, s.n4, s.n5],
@@ -43,7 +40,6 @@ async function getParams(tipo: TipoSorteo): Promise<Record<string, Hiperparams>>
 }
 
 async function getPesos(tipo: TipoSorteo): Promise<Record<string, number>> {
-  // toma el performance más reciente de cada modelo
   const out: Record<string, number> = {}
   for (const m of MODELOS) {
     const perf = await prisma.modeloPerformance.findFirst({
@@ -58,9 +54,25 @@ async function getPesos(tipo: TipoSorteo): Promise<Record<string, number>> {
   return out
 }
 
-// ============================================================
-// ENTRENAMIENTO: ajusta hiperparámetros, evalua y recalcula pesos
-// ============================================================
+// FIX Bug 3: obtener números que fallaron en las últimas N predicciones
+// para pasarlos como penalizados al ensemble.
+async function getPenalizados(tipo: TipoSorteo, ultimas: number = 3): Promise<Set<number>> {
+  const penalizados = new Set<number>()
+  const recientes = await prisma.prediccion.findMany({
+    where: { tipo, evaluada: true },
+    orderBy: { generadaEn: 'desc' },
+    take: ultimas,
+  })
+  for (const p of recientes ?? []) {
+    const reales = new Set(p.reales ?? [])
+    ;(p.numeros ?? []).forEach((n: number) => {
+      // Solo penalizar si falló (no estaba en el resultado real)
+      if (!reales.has(n)) penalizados.add(n)
+    })
+  }
+  return penalizados
+}
+
 export async function entrenar(tipo: TipoSorteo) {
   const hist = await getHistorial(tipo)
   if ((hist?.length ?? 0) < 30) {
@@ -81,7 +93,6 @@ export async function entrenar(tipo: TipoSorteo) {
     evaluaciones.map((e) => ({ modelo: e.modelo, precisionMedia: e.ev.precisionMedia }))
   )
 
-  // persistir parámetros y performance
   for (const e of evaluaciones) {
     await prisma.parametrosModelo.upsert({
       where: { uq_tipo_modelo: { tipo, modelo: e.modelo } },
@@ -90,77 +101,41 @@ export async function entrenar(tipo: TipoSorteo) {
     })
     await prisma.modeloPerformance.create({
       data: {
-        tipo,
-        modelo: e.modelo,
-        mae: e.ev.mae,
-        rmse: e.ev.rmse,
-        precisionMedia: e.ev.precisionMedia,
-        hitRate: e.ev.hitRate,
-        muestras: e.ev.muestras,
-        peso: pesos[e.modelo] ?? 0,
-        params: e.params,
+        tipo, modelo: e.modelo, mae: e.ev.mae, rmse: e.ev.rmse,
+        precisionMedia: e.ev.precisionMedia, hitRate: e.ev.hitRate,
+        muestras: e.ev.muestras, peso: pesos[e.modelo] ?? 0, params: e.params,
       },
     })
-    // guardar validaciones detalladas (últimas)
     for (const d of (e.ev.detallePorSorteo ?? []).slice(-PASOS_BACKTEST)) {
       try {
         await prisma.resultadoValidacion.create({
-          data: {
-            tipo,
-            modelo: e.modelo,
-            fechaSorteo: new Date(d.fecha),
-            predichos: d.predichos,
-            reales: d.reales,
-            aciertos: d.aciertos,
-          },
+          data: { tipo, modelo: e.modelo, fechaSorteo: new Date(d.fecha), predichos: d.predichos, reales: d.reales, aciertos: d.aciertos },
         })
-      } catch {
-        // ignora fechas inválidas
-      }
+      } catch { /* ignora fechas inválidas */ }
     }
   }
 
   const mejor = [...evaluaciones].sort((a, b) => b.ev.precisionMedia - a.ev.precisionMedia)[0]
-
   const detalle =
     `Se evaluaron ${MODELOS.length} modelos mediante validación walk-forward sobre los últimos ` +
     `${PASOS_BACKTEST} sorteos. El mejor modelo fue ${NOMBRES_MODELOS[mejor.modelo]} ` +
     `con ${mejor.ev.precisionMedia.toFixed(2)} aciertos promedio (hit-rate ${(mejor.ev.hitRate * 100).toFixed(1)}%). ` +
     (regimen.cambio
-      ? `Se detectó un cambio de régimen (divergencia ${(regimen.divergencia * 100).toFixed(0)}%): ` +
-        `se prioriza información reciente.`
+      ? `Se detectó un cambio de régimen (divergencia ${(regimen.divergencia * 100).toFixed(0)}%): se prioriza información reciente.`
       : `La serie se mantiene estable (divergencia ${(regimen.divergencia * 100).toFixed(0)}%).`)
 
   await prisma.logAprendizaje.create({
     data: {
-      tipo,
-      evento: 'entrenamiento',
-      titulo: `Re-entrenamiento completado (${tipo})`,
-      detalle,
-      data: {
-        pesos,
-        regimen,
-        evaluaciones: evaluaciones.map((e) => ({
-          modelo: e.modelo,
-          precisionMedia: e.ev.precisionMedia,
-          hitRate: e.ev.hitRate,
-          mae: e.ev.mae,
-          rmse: e.ev.rmse,
-          params: e.params,
-          probados: e.probados,
-        })),
-      },
+      tipo, evento: 'entrenamiento', titulo: `Re-entrenamiento completado (${tipo})`,
+      detalle, data: { pesos, regimen, evaluaciones: evaluaciones.map((e) => ({ modelo: e.modelo, precisionMedia: e.ev.precisionMedia, hitRate: e.ev.hitRate, mae: e.ev.mae, rmse: e.ev.rmse, params: e.params, probados: e.probados })) },
     },
   })
 
   if (regimen.cambio) {
     await prisma.logAprendizaje.create({
       data: {
-        tipo,
-        evento: 'cambio_regimen',
-        titulo: `Cambio de régimen detectado (${tipo})`,
-        detalle: `La distribución reciente diverge ${(regimen.divergencia * 100).toFixed(0)}% respecto al histórico. ` +
-          `El sistema aumenta el peso de los modelos que reaccionan a datos recientes.`,
+        tipo, evento: 'cambio_regimen', titulo: `Cambio de régimen detectado (${tipo})`,
+        detalle: `La distribución reciente diverge ${(regimen.divergencia * 100).toFixed(0)}% respecto al histórico. El sistema aumenta el peso de los modelos que reaccionan a datos recientes.`,
         data: regimen,
       },
     })
@@ -169,9 +144,6 @@ export async function entrenar(tipo: TipoSorteo) {
   return { ok: true, pesos, regimen, evaluaciones: evaluaciones.map((e) => ({ ...e.ev, modelo: e.modelo })) }
 }
 
-// ============================================================
-// PREDICCIÓN: genera y guarda una predicción de ensemble
-// ============================================================
 export async function predecir(tipo: TipoSorteo) {
   const hist = await getHistorial(tipo)
   if ((hist?.length ?? 0) < 25) {
@@ -179,46 +151,45 @@ export async function predecir(tipo: TipoSorteo) {
   }
   const params = await getParams(tipo)
   const pesos = await getPesos(tipo)
-  const ensemble = generarEnsemble(hist, pesos, params)
+
+  // FIX Bug 3: pasar penalizados al ensemble
+  const penalizados = await getPenalizados(tipo, 3)
+
+  const ensemble = generarEnsemble(hist, pesos, params, penalizados)
   const ultimoSorteo = hist[hist.length - 1]?.fecha ?? ''
 
-  // explicación transparente
+  const penalizadosStr = penalizados.size > 0
+    ? ` Se aplicó penalización del 40% a ${penalizados.size} números que fallaron en predicciones recientes: [${[...penalizados].sort((a,b)=>a-b).join(', ')}].`
+    : ''
+
   const pesosOrden = Object.entries(pesos).sort((a, b) => b[1] - a[1])
   const explicacion =
     `Predicción combinada (ensemble) de ${MODELOS.length} modelos. ` +
     `Modelo líder: ${NOMBRES_MODELOS[ensemble.modeloLider]} (${((pesos[ensemble.modeloLider] ?? 0) * 100).toFixed(0)}% del peso). ` +
-    `Distribución de pesos: ${pesosOrden
-      .map(([m, w]) => `${NOMBRES_MODELOS[m as ModeloId]} ${(w * 100).toFixed(0)}%`)
-      .join(', ')}. ` +
+    `Distribución de pesos: ${pesosOrden.map(([m, w]) => `${NOMBRES_MODELOS[m as ModeloId]} ${(w * 100).toFixed(0)}%`).join(', ')}. ` +
     `Los números ${ensemble.numeros.join(', ')} obtuvieron el mayor score combinado; ` +
-    `el número diferente ${ensemble.diff} lidera su categoría. Confianza estimada ${ensemble.confianza}%.`
+    `el número diferente ${ensemble.diff} lidera su categoría. Confianza estimada ${ensemble.confianza}%.` +
+    penalizadosStr
 
   let guardada = null
   try {
     guardada = await prisma.prediccion.create({
       data: {
-        tipo,
-        ultimoSorteo: new Date(ultimoSorteo),
-        numeros: ensemble.numeros,
-        diffNum: ensemble.diff,
-        modeloLider: ensemble.modeloLider,
-        confianza: ensemble.confianza,
-        pesos,
-        scoresPorModelo: ensemble.scoresPorModelo,
-        explicacion,
+        tipo, ultimoSorteo: new Date(ultimoSorteo),
+        numeros: ensemble.numeros, diffNum: ensemble.diff,
+        modeloLider: ensemble.modeloLider, confianza: ensemble.confianza,
+        pesos, scoresPorModelo: ensemble.scoresPorModelo, explicacion,
       },
     })
   } catch (e) {
-    // ya existe una predicción reciente (misma fecha) -> devuelve la generada igualmente
+    // ya existe predicción para esta fecha
   }
 
   await prisma.logAprendizaje.create({
     data: {
-      tipo,
-      evento: 'prediccion',
-      titulo: `Nueva predicción generada (${tipo})`,
+      tipo, evento: 'prediccion', titulo: `Nueva predicción generada (${tipo})`,
       detalle: explicacion,
-      data: { numeros: ensemble.numeros, diff: ensemble.diff, confianza: ensemble.confianza, pesos },
+      data: { numeros: ensemble.numeros, diff: ensemble.diff, confianza: ensemble.confianza, pesos, penalizados: [...penalizados] },
     },
   })
 
@@ -226,30 +197,19 @@ export async function predecir(tipo: TipoSorteo) {
     ok: true,
     prediccion: {
       id: guardada ? Number(guardada.id) : null,
-      tipo,
-      ultimoSorteo,
-      numeros: ensemble.numeros,
-      diff: ensemble.diff,
-      modeloLider: ensemble.modeloLider,
-      confianza: ensemble.confianza,
-      pesos,
-      scoresPorModelo: ensemble.scoresPorModelo,
-      contribPrincipal: ensemble.contribPrincipal,
-      explicacion,
+      tipo, ultimoSorteo,
+      numeros: ensemble.numeros, diff: ensemble.diff,
+      modeloLider: ensemble.modeloLider, confianza: ensemble.confianza,
+      pesos, scoresPorModelo: ensemble.scoresPorModelo,
+      contribPrincipal: ensemble.contribPrincipal, explicacion,
     },
   }
 }
 
-// ============================================================
-// EVALUACIÓN: al llegar un sorteo real, evalua predicciones pendientes
-// ============================================================
 export async function evaluarPendientes(tipo: TipoSorteo) {
-  const pendientes = await prisma.prediccion.findMany({
-    where: { tipo, evaluada: false },
-  })
+  const pendientes = await prisma.prediccion.findMany({ where: { tipo, evaluada: false } })
   let evaluadas = 0
   for (const p of pendientes ?? []) {
-    // busca el primer sorteo posterior a ultimoSorteo
     const siguiente = await prisma.sorteo.findFirst({
       where: { tipo, fecha: { gt: p.ultimoSorteo } },
       orderBy: { fecha: 'asc' },
@@ -261,25 +221,12 @@ export async function evaluarPendientes(tipo: TipoSorteo) {
     const diffAcertado = p.diffNum === siguiente.diff
     await prisma.prediccion.update({
       where: { id: p.id },
-      data: {
-        resultadoFecha: siguiente.fecha,
-        reales,
-        rDiff: siguiente.diff,
-        aciertos,
-        diffAcertado,
-        evaluada: true,
-      },
+      data: { resultadoFecha: siguiente.fecha, reales, rDiff: siguiente.diff, aciertos, diffAcertado, evaluada: true },
     })
     await prisma.logAprendizaje.create({
       data: {
-        tipo,
-        evento: 'evaluacion',
-        titulo: `Predicción evaluada (${tipo})`,
-        detalle:
-          `La predicción [${(p.numeros ?? []).join(', ')}] se comparó con el sorteo real ` +
-          `[${reales.join(', ')}] del ${fechaISO(siguiente.fecha)}: ${aciertos}/5 aciertos` +
-          `${diffAcertado ? ' + número diferente acertado' : ''}. ` +
-          `El sistema usará este resultado para recalibrar los pesos de los modelos.`,
+        tipo, evento: 'evaluacion', titulo: `Predicción evaluada (${tipo})`,
+        detalle: `La predicción [${(p.numeros ?? []).join(', ')}] se comparó con el sorteo real [${reales.join(', ')}] del ${fechaISO(siguiente.fecha)}: ${aciertos}/5 aciertos${diffAcertado ? ' + número diferente acertado' : ''}. El sistema usará este resultado para recalibrar los pesos de los modelos.`,
         data: { predichos: p.numeros, reales, aciertos, diffAcertado, modeloLider: p.modeloLider },
       },
     })
@@ -288,15 +235,7 @@ export async function evaluarPendientes(tipo: TipoSorteo) {
   return evaluadas
 }
 
-// ============================================================
-// INGRESO de sorteo real + ciclo completo de aprendizaje
-// ============================================================
-export async function agregarSorteo(input: {
-  fecha: string
-  tipo: TipoSorteo
-  n: number[]
-  diff: number
-}) {
+export async function agregarSorteo(input: { fecha: string; tipo: TipoSorteo; n: number[]; diff: number }) {
   const { fecha, tipo, n, diff } = input
   const nums = (n ?? []).map((x) => Number(x))
   if (nums.length !== 5 || new Set(nums).size !== 5) {
@@ -307,9 +246,7 @@ export async function agregarSorteo(input: {
   }
   const [n1, n2, n3, n4, n5] = [...nums].sort((a, b) => a - b)
   try {
-    await prisma.sorteo.create({
-      data: { fecha: new Date(fecha), tipo, n1, n2, n3, n4, n5, diff },
-    })
+    await prisma.sorteo.create({ data: { fecha: new Date(fecha), tipo, n1, n2, n3, n4, n5, diff } })
   } catch (e) {
     return { ok: false, mensaje: 'Ya existe un sorteo para esa fecha y tipo.' }
   }
